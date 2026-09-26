@@ -1,6 +1,7 @@
 """Tests for the Chain class."""
 
 import pytest
+
 from catena import Chain, Context, Message
 
 

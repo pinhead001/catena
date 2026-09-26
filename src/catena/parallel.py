@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any
+from typing import Any, cast
 
 from catena.context import Context
 from catena.models import Message
@@ -24,7 +24,7 @@ async def parallel(*coros: Any) -> list[Context]:
             print(result.messages[-1].content)
         ```
     """
-    return await asyncio.gather(*coros)
+    return cast(list[Context], await asyncio.gather(*coros))
 
 
 async def map_parallel(
@@ -44,6 +44,7 @@ async def map_parallel(
 
     async def run_with_limit(input_data: str | list[Message] | Context) -> Context:
         async with semaphore:
-            return await chain.run(input_data)
+            result = await chain.run(input_data)
+            return cast(Context, result)
 
     return await asyncio.gather(*[run_with_limit(inp) for inp in inputs])

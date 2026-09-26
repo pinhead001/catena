@@ -13,6 +13,16 @@ class Role(str, Enum):
     SYSTEM = "system"
     USER = "user"
     ASSISTANT = "assistant"
+    TOOL = "tool"
+
+
+@dataclass
+class ToolCall:
+    """A single tool invocation requested by the model."""
+
+    id: str
+    name: str
+    arguments: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -21,6 +31,9 @@ class Message:
 
     role: Role | str
     content: str
+    tool_calls: list[ToolCall] | None = None
+    tool_call_id: str | None = None
+    name: str | None = None
 
     @classmethod
     def system(cls, content: str) -> Message:
@@ -31,12 +44,26 @@ class Message:
         return cls(role=Role.USER, content=content)
 
     @classmethod
-    def assistant(cls, content: str) -> Message:
-        return cls(role=Role.ASSISTANT, content=content)
+    def assistant(cls, content: str = "", tool_calls: list[ToolCall] | None = None) -> Message:
+        return cls(role=Role.ASSISTANT, content=content, tool_calls=tool_calls)
 
-    def to_dict(self) -> dict[str, str]:
+    @classmethod
+    def tool(cls, content: str, tool_call_id: str, name: str | None = None) -> Message:
+        """Create a message carrying the result of a tool call."""
+        return cls(role=Role.TOOL, content=content, tool_call_id=tool_call_id, name=name)
+
+    def to_dict(self) -> dict[str, Any]:
         role = self.role.value if isinstance(self.role, Role) else self.role
-        return {"role": role, "content": self.content}
+        d: dict[str, Any] = {"role": role, "content": self.content}
+        if self.tool_calls:
+            d["tool_calls"] = [
+                {"id": tc.id, "name": tc.name, "arguments": tc.arguments} for tc in self.tool_calls
+            ]
+        if self.tool_call_id:
+            d["tool_call_id"] = self.tool_call_id
+        if self.name:
+            d["name"] = self.name
+        return d
 
 
 @dataclass
@@ -63,10 +90,25 @@ class Response:
     usage: Usage = field(default_factory=Usage)
     model: str = ""
     metadata: dict[str, Any] = field(default_factory=dict)
+    tool_calls: list[ToolCall] = field(default_factory=list)
 
     @property
     def message(self) -> Message:
-        return Message.assistant(self.content)
+        return Message.assistant(self.content, tool_calls=self.tool_calls or None)
+
+    @property
+    def has_tool_calls(self) -> bool:
+        return len(self.tool_calls) > 0
+
+
+@dataclass
+class StreamChunk:
+    """A single chunk of a streamed completion."""
+
+    delta: str = ""
+    done: bool = False
+    usage: Usage | None = None
+    finish_reason: str | None = None
 
 
 # Pricing per 1M tokens (as of 2024)

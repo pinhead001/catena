@@ -1,7 +1,6 @@
 """Tests for data models."""
 
-import pytest
-from catena.models import Message, Role, Usage, calculate_cost
+from catena.models import Message, Response, Role, StreamChunk, ToolCall, Usage, calculate_cost
 
 
 def test_message_creation():
@@ -47,3 +46,37 @@ def test_calculate_cost_unknown_model():
     """Test cost calculation for unknown model."""
     cost = calculate_cost("unknown-model", input_tokens=1000, output_tokens=1000)
     assert cost == 0.0
+
+
+def test_message_tool_factory():
+    """Test creating a tool-result message."""
+    msg = Message.tool("72F and sunny", tool_call_id="call_1", name="get_weather")
+    assert msg.role == Role.TOOL
+    assert msg.tool_call_id == "call_1"
+    assert msg.name == "get_weather"
+
+
+def test_message_with_tool_calls_to_dict():
+    """Test that tool_calls survive serialization to dict."""
+    calls = [ToolCall(id="call_1", name="get_weather", arguments={"city": "NYC"})]
+    msg = Message.assistant("", tool_calls=calls)
+    d = msg.to_dict()
+    assert d["tool_calls"] == [
+        {"id": "call_1", "name": "get_weather", "arguments": {"city": "NYC"}}
+    ]
+
+
+def test_response_message_carries_tool_calls():
+    """Test that Response.message includes tool_calls."""
+    calls = [ToolCall(id="call_1", name="get_weather", arguments={"city": "NYC"})]
+    response = Response(content="", tool_calls=calls)
+    assert response.has_tool_calls
+    assert response.message.tool_calls == calls
+
+
+def test_stream_chunk_defaults():
+    """Test StreamChunk default values."""
+    chunk = StreamChunk(delta="hello")
+    assert chunk.delta == "hello"
+    assert chunk.done is False
+    assert chunk.usage is None
