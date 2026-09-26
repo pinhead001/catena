@@ -127,7 +127,10 @@ class ConsoleObserver(Observer):
         if self.verbose:
             cost = ctx.usage.cost_usd
             tokens = ctx.usage.input_tokens + ctx.usage.output_tokens
-            print(f"{self.prefix}   <- {step_name} ({duration*1000:.0f}ms, {tokens} tokens, ${cost:.4f})")
+            print(
+                f"{self.prefix}   <- {step_name} "
+                f"({duration * 1000:.0f}ms, {tokens} tokens, ${cost:.4f})"
+            )
 
     def on_step_error(self, step_name: str, error: Exception) -> None:
         print(f"{self.prefix}   !! {step_name} failed: {error}")

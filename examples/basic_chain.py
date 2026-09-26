@@ -2,8 +2,7 @@
 
 import asyncio
 
-from catena import Chain, Context, Message
-from catena import providers
+from catena import Chain, Context, Message, providers
 
 
 async def main():
@@ -44,7 +43,7 @@ async def main():
         role = msg.role.value if hasattr(msg.role, "value") else msg.role
         print(f"{role}: {msg.content[:100]}...")
 
-    print(f"\n=== Usage ===")
+    print("\n=== Usage ===")
     print(f"Tokens: {result.usage.input_tokens + result.usage.output_tokens}")
     print(f"Cost: ${result.usage.cost_usd:.4f}")
 

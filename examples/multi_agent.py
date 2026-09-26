@@ -2,8 +2,7 @@
 
 import asyncio
 
-from catena import Chain, Context, Message
-from catena import providers
+from catena import Chain, Context, Message, providers
 
 
 async def main():

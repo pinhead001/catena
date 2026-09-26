@@ -156,6 +156,43 @@ def on_end(name, ctx, duration):
 # [catena] Complete: 150 tokens, $0.0003
 ```
 
+### Tool Calling
+
+```python
+from catena import Message, providers
+from catena.tools import tool, run_tool_calls
+
+@tool
+def get_weather(city: str) -> str:
+    """Get the current weather for a city."""
+    return f"72F and sunny in {city}"
+
+provider = providers.openai()
+messages = [Message.user("What's the weather in Tokyo?")]
+
+response = await provider.complete(messages, tools=[get_weather])
+messages.append(response.message)
+
+if response.has_tool_calls:
+    results = await run_tool_calls([get_weather], response.tool_calls)
+    for tool_call_id, content in results:
+        messages.append(Message.tool(content, tool_call_id=tool_call_id))
+
+    response = await provider.complete(messages, tools=[get_weather])
+```
+
+### Streaming
+
+```python
+provider = providers.anthropic()
+
+async for chunk in provider.stream([Message.user("Write a haiku")]):
+    if chunk.done:
+        print(f"\nCost: ${chunk.usage.cost_usd:.4f}")
+    else:
+        print(chunk.delta, end="", flush=True)
+```
+
 ## Why Catena?
 
 | Feature | Catena | LangChain | Raw API |
@@ -231,7 +268,17 @@ await provider.complete(
     model: str = None,
     temperature: float = 0.7,
     max_tokens: int = None,
+    tools: list[Tool] = None,
 ) -> Response
+
+# Streaming (yields StreamChunk; the last chunk has done=True and `usage`)
+async for chunk in provider.stream(
+    messages: list[Message],
+    model: str = None,
+    temperature: float = 0.7,
+    max_tokens: int = None,
+):
+    ...
 ```
 
 ## License

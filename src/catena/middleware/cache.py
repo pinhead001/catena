@@ -6,9 +6,10 @@ import hashlib
 import json
 import time
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from dataclasses import dataclass
 from functools import wraps
-from typing import Any, Callable, TypeVar
+from typing import Any, TypeVar
 
 from catena.models import Message, Response, Usage
 
@@ -17,11 +18,14 @@ T = TypeVar("T")
 
 def _hash_messages(messages: list[Message], model: str, **kwargs: Any) -> str:
     """Create a cache key from messages and parameters."""
-    data = {
+    data: dict[str, Any] = {
         "messages": [m.to_dict() for m in messages],
         "model": model,
         **{k: v for k, v in kwargs.items() if k in ("temperature", "max_tokens")},
     }
+    tools = kwargs.get("tools")
+    if tools:
+        data["tools"] = sorted(t.name for t in tools)
     content = json.dumps(data, sort_keys=True)
     return hashlib.sha256(content.encode()).hexdigest()[:16]
 
@@ -76,7 +80,7 @@ class Cache(ABC):
                 cached.metadata["cached"] = True
                 return cached
 
-            response = await func(messages, model=model, **kwargs)
+            response: Response = await func(messages, model=model, **kwargs)
             await self.set(key, response, ttl)
             return response
 
@@ -132,6 +136,7 @@ class MemoryCache(Cache):
                 cost_usd=0.0,  # Cached = free
             ),
             metadata=entry.response.metadata.copy(),
+            tool_calls=list(entry.response.tool_calls),
         )
 
     async def set(self, key: str, response: Response, ttl: float | None = None) -> None:

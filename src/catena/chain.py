@@ -6,11 +6,11 @@ import asyncio
 import functools
 import time
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, TypeVar, overload
 
 from catena.context import Context
-from catena.models import Message, Response
+from catena.models import Message
 
 T = TypeVar("T")
 
@@ -204,6 +204,7 @@ def step(func: StepFunc) -> StepFunc: ...
 
 @overload
 def step(
+    *,
     name: str | None = None,
     retries: int = 3,
     retry_delay: float = 1.0,
@@ -213,6 +214,7 @@ def step(
 
 def step(
     func: StepFunc | None = None,
+    *,
     name: str | None = None,
     retries: int = 3,
     retry_delay: float = 1.0,

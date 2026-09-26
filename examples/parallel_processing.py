@@ -2,8 +2,7 @@
 
 import asyncio
 
-from catena import Chain, Context
-from catena import providers
+from catena import Chain, Context, providers
 from catena.parallel import map_parallel
 
 
