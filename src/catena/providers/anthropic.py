@@ -70,6 +70,7 @@ class AnthropicProvider(Provider):
         max_tokens: int | None = None,
         system: str | None = None,
         tools: list[Tool] | None = None,
+        tool_choice: str | None = None,
         **kwargs: Any,
     ) -> Response:
         """Generate a completion using Anthropic Claude."""
@@ -78,6 +79,8 @@ class AnthropicProvider(Provider):
 
         if tools:
             kwargs["tools"] = [t.to_anthropic() for t in tools]
+        if tool_choice:
+            kwargs["tool_choice"] = {"type": "tool", "name": tool_choice}
 
         response = await self._client.messages.create(
             model=model_name,

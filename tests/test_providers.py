@@ -100,6 +100,21 @@ async def test_openai_complete_parses_tool_calls(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_openai_complete_forces_tool_choice(monkeypatch):
+    create = AsyncMock(return_value=_FakeCompletion(content="ok"))
+    fake_client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create)))
+    monkeypatch.setattr(openai_module, "AsyncOpenAI", lambda **kwargs: fake_client)
+
+    provider = OpenAIProvider(api_key="test")
+    await provider.complete([Message.user("hi")], tool_choice="get_weather")
+
+    assert create.call_args.kwargs["tool_choice"] == {
+        "type": "function",
+        "function": {"name": "get_weather"},
+    }
+
+
+@pytest.mark.asyncio
 async def test_openai_stream_yields_deltas_and_usage(monkeypatch):
     chunks = [
         _FakeStreamChunk([_FakeStreamChoice("Hello")]),
@@ -203,6 +218,20 @@ async def test_anthropic_complete_parses_tool_calls(monkeypatch):
 
     assert response.tool_calls[0].name == "get_weather"
     assert response.tool_calls[0].arguments == {"city": "NYC"}
+
+
+@pytest.mark.asyncio
+async def test_anthropic_complete_forces_tool_choice(monkeypatch):
+    create = AsyncMock(
+        return_value=_FakeAnthropicResponse(content=[], usage=_FakeAnthropicUsage(1, 1))
+    )
+    fake_client = SimpleNamespace(messages=SimpleNamespace(create=create))
+    monkeypatch.setattr(anthropic_module, "AsyncAnthropic", lambda **kwargs: fake_client)
+
+    provider = AnthropicProvider(api_key="test")
+    await provider.complete([Message.user("hi")], tool_choice="get_weather")
+
+    assert create.call_args.kwargs["tool_choice"] == {"type": "tool", "name": "get_weather"}
 
 
 @pytest.mark.asyncio

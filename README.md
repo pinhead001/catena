@@ -42,6 +42,7 @@ pip install catena-ai
 # With provider support
 pip install catena-ai[openai]
 pip install catena-ai[anthropic]
+pip install catena-ai[structured]  # Pydantic, for structured output
 pip install catena-ai[all]
 ```
 
@@ -180,6 +181,32 @@ if response.has_tool_calls:
 
     response = await provider.complete(messages, tools=[get_weather])
 ```
+
+### Structured Output
+
+Get validated, typed objects instead of strings. Requires `pip install catena-ai[structured]`.
+
+```python
+from datetime import date
+from pydantic import BaseModel
+
+class Invoice(BaseModel):
+    company: str
+    amount: float
+    due_date: date
+
+result = await provider.complete_structured(
+    [Message.user(f"Extract this invoice: {text}")],
+    schema=Invoice,
+    retries=2,  # invalid output is sent back to the model with the error
+)
+
+result.output.amount      # float
+result.output.due_date    # datetime.date
+result.usage.cost_usd     # total across all attempts
+```
+
+Raises `StructuredOutputError` if the model can't produce valid output within the retry budget.
 
 ### Streaming
 
