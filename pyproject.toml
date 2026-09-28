@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "catena-ai"
-version = "0.2.0"
+dynamic = ["version"]
 description = "Lightweight AI agent orchestration - chain LLM calls with retries, caching, and cost tracking"
 readme = "README.md"
 license = "MIT"
@@ -23,10 +23,7 @@ classifiers = [
     "Programming Language :: Python :: 3.12",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
-dependencies = [
-    "httpx>=0.25.0",
-    "pydantic>=2.0.0",
-]
+dependencies = []
 
 [project.optional-dependencies]
 openai = ["openai>=1.0.0"]
@@ -40,9 +37,12 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/catena-ai/catena"
-Documentation = "https://catena-ai.dev"
-Repository = "https://github.com/catena-ai/catena"
+Homepage = "https://github.com/pinhead001/catena"
+Repository = "https://github.com/pinhead001/catena"
+Issues = "https://github.com/pinhead001/catena/issues"
+
+[tool.hatch.version]
+path = "src/catena/__init__.py"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/catena"]
