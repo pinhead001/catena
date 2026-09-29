@@ -21,7 +21,7 @@ def _hash_messages(messages: list[Message], model: str, **kwargs: Any) -> str:
     data: dict[str, Any] = {
         "messages": [m.to_dict() for m in messages],
         "model": model,
-        **{k: v for k, v in kwargs.items() if k in ("temperature", "max_tokens")},
+        **{k: v for k, v in kwargs.items() if k in ("temperature", "max_tokens", "tool_choice")},
     }
     tools = kwargs.get("tools")
     if tools:

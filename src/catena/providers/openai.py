@@ -51,6 +51,7 @@ class OpenAIProvider(Provider):
         temperature: float = 0.7,
         max_tokens: int | None = None,
         tools: list[Tool] | None = None,
+        tool_choice: str | None = None,
         **kwargs: Any,
     ) -> Response:
         """Generate a completion using OpenAI."""
@@ -58,6 +59,8 @@ class OpenAIProvider(Provider):
 
         if tools:
             kwargs["tools"] = [t.to_openai() for t in tools]
+        if tool_choice:
+            kwargs["tool_choice"] = {"type": "function", "function": {"name": tool_choice}}
 
         response = await self._client.chat.completions.create(
             model=model_name,
