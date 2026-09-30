@@ -131,6 +131,8 @@ async def run_tool_calls(tools: list[Tool], tool_calls: list[Any]) -> list[Any]:
         matched = by_name.get(call.name)
         if matched is None:
             return call.id, f"Error: unknown tool '{call.name}'"
+        if getattr(call, "error", None):
+            return call.id, f"Error: {call.error}"
         try:
             result = await matched.call(**call.arguments)
             return call.id, str(result)

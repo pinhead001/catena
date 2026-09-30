@@ -84,3 +84,20 @@ async def test_run_tool_calls_unknown_tool():
 
     assert results[0][0] == "1"
     assert "unknown tool" in results[0][1]
+
+
+@pytest.mark.asyncio
+async def test_run_tool_calls_reports_argument_error_without_calling():
+    called = []
+
+    @tool
+    def add(a: int, b: int) -> int:
+        """Add two numbers."""
+        called.append((a, b))
+        return a + b
+
+    calls = [ToolCall(id="1", name="add", error="Arguments were not valid JSON")]
+    results = await run_tool_calls([add], calls)
+
+    assert results == [("1", "Error: Arguments were not valid JSON")]
+    assert called == []
