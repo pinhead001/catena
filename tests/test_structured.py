@@ -1,13 +1,16 @@
 """Tests for structured output."""
 
+import re
 from datetime import date
-from typing import Any
+from typing import Any, Generic, TypeVar
 
 import pytest
 from pydantic import BaseModel
 
 from catena import Message, Provider, Response, StructuredOutputError, ToolCall, Usage
 from catena.structured import schema_tool
+
+ItemT = TypeVar("ItemT")
 
 
 class Invoice(BaseModel):
@@ -121,3 +124,59 @@ async def test_complete_structured_does_not_mutate_caller_messages():
     await provider.complete_structured(messages, schema=Invoice)
 
     assert len(messages) == 1
+
+
+def test_schema_tool_sanitizes_generic_model_name():
+    class Page(BaseModel, Generic[ItemT]):
+        items: list[ItemT]
+
+    name = schema_tool(Page[Invoice]).name
+
+    assert name == "Page_Invoice"
+    assert re.fullmatch(r"[a-zA-Z0-9_-]{1,64}", name)
+
+
+@pytest.mark.asyncio
+async def test_complete_structured_retries_on_unparseable_arguments():
+    bad = Response(
+        content="",
+        usage=Usage(cost_usd=0.01),
+        tool_calls=[ToolCall(id="c1", name="Invoice", error="Arguments were not valid JSON")],
+    )
+    provider = ScriptedProvider(
+        [bad, _tool_response({"company": "Acme", "amount": 1, "due_date": "2026-10-01"})]
+    )
+
+    result = await provider.complete_structured([Message.user("extract")], schema=Invoice)
+
+    assert result.attempts == 2
+    assert "not valid JSON" in provider.calls[1]["messages"][-1].content
+
+
+@pytest.mark.asyncio
+async def test_structured_output_error_reports_usage():
+    provider = ScriptedProvider([_tool_response({"company": "Acme"}) for _ in range(3)])
+
+    with pytest.raises(StructuredOutputError) as exc_info:
+        await provider.complete_structured([Message.user("extract")], schema=Invoice)
+
+    assert exc_info.value.usage.cost_usd == pytest.approx(0.03)
+
+
+@pytest.mark.asyncio
+async def test_complete_structured_rejects_negative_retries():
+    provider = ScriptedProvider([])
+
+    with pytest.raises(ValueError):
+        await provider.complete_structured([Message.user("x")], schema=Invoice, retries=-1)
+
+    assert provider.calls == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kwarg", ["tools", "tool_choice"])
+async def test_complete_structured_rejects_tools_kwargs(kwarg):
+    provider = ScriptedProvider([])
+
+    with pytest.raises(TypeError, match="sets tools and tool_choice"):
+        await provider.complete_structured([Message.user("x")], schema=Invoice, **{kwarg: None})

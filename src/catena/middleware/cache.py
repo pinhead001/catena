@@ -25,7 +25,8 @@ def _hash_messages(messages: list[Message], model: str, **kwargs: Any) -> str:
     }
     tools = kwargs.get("tools")
     if tools:
-        data["tools"] = sorted(t.name for t in tools)
+        # Full definitions, not just names: two schemas can share a class name.
+        data["tools"] = sorted((t.to_openai() for t in tools), key=lambda d: d["function"]["name"])
     content = json.dumps(data, sort_keys=True)
     return hashlib.sha256(content.encode()).hexdigest()[:16]
 

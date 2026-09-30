@@ -12,6 +12,19 @@ from catena.providers.base import Provider
 from catena.tools import Tool
 
 
+def _parse_tool_call(id: str, name: str, raw_arguments: str | None) -> ToolCall:
+    """Parse tool-call arguments, recording bad JSON on the call instead of raising."""
+    try:
+        arguments = json.loads(raw_arguments or "{}")
+    except json.JSONDecodeError as e:
+        error = f"Arguments were not valid JSON ({e}): {raw_arguments}"
+        return ToolCall(id=id, name=name, error=error)
+    if not isinstance(arguments, dict):
+        error = f"Arguments must be a JSON object: {raw_arguments}"
+        return ToolCall(id=id, name=name, error=error)
+    return ToolCall(id=id, name=name, arguments=arguments)
+
+
 class OpenAIProvider(Provider):
     """OpenAI API provider.
 
@@ -78,11 +91,7 @@ class OpenAIProvider(Provider):
         output_tokens = usage_data.completion_tokens if usage_data else 0
 
         tool_calls = [
-            ToolCall(
-                id=tc.id,
-                name=tc.function.name,
-                arguments=json.loads(tc.function.arguments or "{}"),
-            )
+            _parse_tool_call(tc.id, tc.function.name, tc.function.arguments)
             for tc in (message.tool_calls or [])
             if tc.type == "function"
         ]
