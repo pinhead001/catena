@@ -23,6 +23,7 @@ class ToolCall:
     id: str
     name: str
     arguments: dict[str, Any] = field(default_factory=dict)
+    error: str | None = None
 
 
 @dataclass

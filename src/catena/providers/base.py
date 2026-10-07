@@ -91,6 +91,13 @@ class Provider(ABC):
         """
         from pydantic import ValidationError
 
+        if retries < 0:
+            raise ValueError(f"retries must be >= 0, got {retries}")
+        if "tools" in kwargs or "tool_choice" in kwargs:
+            raise TypeError(
+                "complete_structured() sets tools and tool_choice itself; don't pass them"
+            )
+
         tool = schema_tool(schema)
         history = list(messages)
         usage = Usage()
@@ -107,6 +114,10 @@ class Provider(ABC):
             if call is None:
                 raw = response.content
                 error = f"You did not call the {tool.name} tool."
+                feedback = f"{error} Your reply was:\n{raw}"
+            elif call.error:
+                raw = error = call.error
+                feedback = error
             else:
                 raw = json.dumps(call.arguments)
                 try:
@@ -114,17 +125,18 @@ class Provider(ABC):
                     return StructuredResponse(output=output, usage=usage, attempts=attempt)
                 except ValidationError as e:
                     error = str(e)
+                feedback = f"Your previous output was:\n{raw}\n\nIt failed validation:\n{error}"
 
             history.append(
                 Message.user(
-                    f"Your previous output was:\n{raw}\n\nIt failed validation:\n{error}\n\n"
-                    f"Call the {tool.name} tool again with corrected arguments."
+                    f"{feedback}\n\nCall the {tool.name} tool again with corrected arguments."
                 )
             )
 
         raise StructuredOutputError(
             f"No valid {schema.__name__} after {retries + 1} attempts: {error}",
             raw_output=raw,
+            usage=usage,
         )
 
     async def __aenter__(self) -> Provider:

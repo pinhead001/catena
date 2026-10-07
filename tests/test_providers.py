@@ -100,6 +100,24 @@ async def test_openai_complete_parses_tool_calls(monkeypatch):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("raw_arguments", ['{"city": "NY', "[1, 2]"])
+async def test_openai_complete_records_bad_tool_arguments(monkeypatch, raw_arguments):
+    fake_response = _FakeCompletion(
+        content="", tool_calls=[_FakeToolCall("call_1", "get_weather", raw_arguments)]
+    )
+    create = AsyncMock(return_value=fake_response)
+    fake_client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create)))
+    monkeypatch.setattr(openai_module, "AsyncOpenAI", lambda **kwargs: fake_client)
+
+    provider = OpenAIProvider(api_key="test")
+    response = await provider.complete([Message.user("weather?")])
+
+    call = response.tool_calls[0]
+    assert call.arguments == {}
+    assert call.error is not None and raw_arguments in call.error
+
+
+@pytest.mark.asyncio
 async def test_openai_complete_forces_tool_choice(monkeypatch):
     create = AsyncMock(return_value=_FakeCompletion(content="ok"))
     fake_client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create)))
