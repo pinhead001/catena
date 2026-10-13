@@ -286,8 +286,10 @@ openai = providers.openai(
 # Anthropic
 anthropic = providers.anthropic(
     api_key: str = None,  # Defaults to ANTHROPIC_API_KEY
-    model: str = "claude-3-5-sonnet-20241022",
+    model: str = "claude-opus-5-5",
 )
+# Current Claude models reject `temperature`, so the Anthropic provider only
+# sends it when you pass one explicitly.
 
 # All providers implement:
 await provider.complete(
@@ -296,6 +298,7 @@ await provider.complete(
     temperature: float = 0.7,
     max_tokens: int = None,
     tools: list[Tool] = None,
+    tool_choice: str = None,  # name of a tool the model should call
 ) -> Response
 
 # Streaming (yields StreamChunk; the last chunk has done=True and `usage`)

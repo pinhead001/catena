@@ -6,7 +6,7 @@ from catena import Message, providers
 
 
 async def main():
-    provider = providers.anthropic(model="claude-3-5-haiku-20241022")
+    provider = providers.anthropic()
 
     messages = [Message.user("Write a haiku about distributed systems.")]
 
