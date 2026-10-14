@@ -238,18 +238,51 @@ async def test_anthropic_complete_parses_tool_calls(monkeypatch):
     assert response.tool_calls[0].arguments == {"city": "NYC"}
 
 
-@pytest.mark.asyncio
-async def test_anthropic_complete_forces_tool_choice(monkeypatch):
+def _fake_anthropic_create(monkeypatch) -> AsyncMock:
     create = AsyncMock(
         return_value=_FakeAnthropicResponse(content=[], usage=_FakeAnthropicUsage(1, 1))
     )
     fake_client = SimpleNamespace(messages=SimpleNamespace(create=create))
     monkeypatch.setattr(anthropic_module, "AsyncAnthropic", lambda **kwargs: fake_client)
+    return create
+
+
+@pytest.mark.asyncio
+async def test_anthropic_tool_choice_uses_auto_and_system_instruction(monkeypatch):
+    create = _fake_anthropic_create(monkeypatch)
 
     provider = AnthropicProvider(api_key="test")
-    await provider.complete([Message.user("hi")], tool_choice="get_weather")
+    await provider.complete(
+        [Message.system("Be terse."), Message.user("hi")], tool_choice="get_weather"
+    )
 
-    assert create.call_args.kwargs["tool_choice"] == {"type": "tool", "name": "get_weather"}
+    kwargs = create.call_args.kwargs
+    assert kwargs["tool_choice"] == {"type": "auto"}
+    assert "Be terse." in kwargs["system"]
+    assert "Respond by calling the get_weather tool." in kwargs["system"]
+
+
+@pytest.mark.asyncio
+async def test_anthropic_defaults_to_current_model_without_temperature(monkeypatch):
+    create = _fake_anthropic_create(monkeypatch)
+
+    provider = AnthropicProvider(api_key="test")
+    await provider.complete([Message.user("hi")])
+
+    kwargs = create.call_args.kwargs
+    assert kwargs["model"] == "claude-opus-5-5"
+    assert "temperature" not in kwargs
+    assert "system" not in kwargs
+
+
+@pytest.mark.asyncio
+async def test_anthropic_sends_temperature_when_given(monkeypatch):
+    create = _fake_anthropic_create(monkeypatch)
+
+    provider = AnthropicProvider(api_key="test", model="claude-haiku-4-5")
+    await provider.complete([Message.user("hi")], temperature=0.2)
+
+    assert create.call_args.kwargs["temperature"] == 0.2
 
 
 @pytest.mark.asyncio
@@ -258,7 +291,13 @@ async def test_anthropic_stream_yields_deltas_and_usage(monkeypatch):
         content=[], usage=_FakeAnthropicUsage(5, 2), stop_reason="end_turn"
     )
     fake_stream = _FakeAnthropicStream(["Hello", " world"], final_message)
-    fake_client = SimpleNamespace(messages=SimpleNamespace(stream=lambda **kwargs: fake_stream))
+    stream_kwargs: dict = {}
+
+    def fake_stream_call(**kwargs):
+        stream_kwargs.update(kwargs)
+        return fake_stream
+
+    fake_client = SimpleNamespace(messages=SimpleNamespace(stream=fake_stream_call))
     monkeypatch.setattr(anthropic_module, "AsyncAnthropic", lambda **kwargs: fake_client)
 
     provider = AnthropicProvider(api_key="test")
@@ -273,3 +312,4 @@ async def test_anthropic_stream_yields_deltas_and_usage(monkeypatch):
     assert deltas == ["Hello", " world"]
     assert final is not None
     assert final.usage.input_tokens == 5
+    assert "temperature" not in stream_kwargs

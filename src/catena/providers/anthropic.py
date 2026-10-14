@@ -14,22 +14,47 @@ from catena.tools import Tool
 def _split_system_and_messages(
     messages: list[Message], system: str | None
 ) -> tuple[str | None, list[dict[str, Any]]]:
-    """Extract a system message and convert the rest to Anthropic's format."""
-    system_msg = system
+    """Collect system text and convert the rest to Anthropic's format."""
+    system_parts = []
     chat_messages = []
 
     for msg in messages:
         role = msg.role.value if isinstance(msg.role, Role) else msg.role
         if role == "system":
-            system_msg = msg.content
+            system_parts.append(msg.content)
         else:
             chat_messages.append({"role": role, "content": msg.content})
+
+    if system:
+        system_parts.append(system)
 
     # Anthropic requires at least one message
     if not chat_messages:
         chat_messages = [{"role": "user", "content": "Hello"}]
 
-    return system_msg, chat_messages
+    return "\n\n".join(system_parts) or None, chat_messages
+
+
+def _request_kwargs(
+    model: str,
+    messages: list[Message],
+    system: str | None,
+    temperature: float | None,
+    max_tokens: int | None,
+) -> dict[str, Any]:
+    """Build the arguments shared by messages.create() and messages.stream()."""
+    system_msg, chat_messages = _split_system_and_messages(messages, system)
+    request: dict[str, Any] = {
+        "model": model,
+        "messages": chat_messages,
+        # Current models always think, and thinking counts toward max_tokens.
+        "max_tokens": max_tokens or 16000,
+    }
+    if system_msg:
+        request["system"] = system_msg
+    if temperature is not None:
+        request["temperature"] = temperature
+    return request
 
 
 class AnthropicProvider(Provider):
@@ -39,7 +64,7 @@ class AnthropicProvider(Provider):
         ```python
         from catena import providers
 
-        provider = providers.anthropic(model="claude-3-5-sonnet-20241022")
+        provider = providers.anthropic()  # claude-opus-5-5
         response = await provider.complete([Message.user("Hello!")])
         ```
     """
@@ -47,7 +72,7 @@ class AnthropicProvider(Provider):
     def __init__(
         self,
         api_key: str | None = None,
-        model: str = "claude-3-5-sonnet-20241022",
+        model: str = "claude-opus-5-5",
     ) -> None:
         try:
             from anthropic import AsyncAnthropic
@@ -66,28 +91,30 @@ class AnthropicProvider(Provider):
         messages: list[Message],
         *,
         model: str | None = None,
-        temperature: float = 0.7,
+        temperature: float | None = None,
         max_tokens: int | None = None,
         system: str | None = None,
         tools: list[Tool] | None = None,
         tool_choice: str | None = None,
         **kwargs: Any,
     ) -> Response:
-        """Generate a completion using Anthropic Claude."""
+        """Generate a completion using Anthropic Claude.
+
+        `temperature` is sent only when given: current Claude models reject it.
+        """
         model_name = model or self.default_model
-        system_msg, chat_messages = _split_system_and_messages(messages, system)
 
         if tools:
             kwargs["tools"] = [t.to_anthropic() for t in tools]
         if tool_choice:
-            kwargs["tool_choice"] = {"type": "tool", "name": tool_choice}
+            # Current Claude models reject forced tool_choice ("tool"/"any") with a 400,
+            # so ask for the tool in the system prompt and leave the choice on auto.
+            kwargs["tool_choice"] = {"type": "auto"}
+            instruction = f"Respond by calling the {tool_choice} tool."
+            system = f"{system}\n\n{instruction}" if system else instruction
 
         response = await self._client.messages.create(
-            model=model_name,
-            messages=chat_messages,  # type: ignore
-            max_tokens=max_tokens or 4096,
-            temperature=temperature,
-            system=system_msg or "",
+            **_request_kwargs(model_name, messages, system, temperature, max_tokens),
             **kwargs,
         )
 
@@ -118,21 +145,16 @@ class AnthropicProvider(Provider):
         messages: list[Message],
         *,
         model: str | None = None,
-        temperature: float = 0.7,
+        temperature: float | None = None,
         max_tokens: int | None = None,
         system: str | None = None,
         **kwargs: Any,
     ) -> AsyncIterator[StreamChunk]:
         """Stream a completion using Anthropic Claude."""
         model_name = model or self.default_model
-        system_msg, chat_messages = _split_system_and_messages(messages, system)
 
         async with self._client.messages.stream(
-            model=model_name,
-            messages=chat_messages,  # type: ignore
-            max_tokens=max_tokens or 4096,
-            temperature=temperature,
-            system=system_msg or "",
+            **_request_kwargs(model_name, messages, system, temperature, max_tokens),
             **kwargs,
         ) as stream:
             async for text in stream.text_stream:

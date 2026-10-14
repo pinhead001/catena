@@ -42,6 +42,13 @@ def test_calculate_cost_gpt4o():
     assert cost == 12.50  # $2.50 + $10.00
 
 
+def test_calculate_cost_prefers_longest_matching_model():
+    """gpt-4o-mini and claude-opus-5-5 must not be billed as gpt-4o / claude-opus-5."""
+    assert calculate_cost("gpt-4o-mini", 1_000_000, 1_000_000) == 0.75
+    assert calculate_cost("claude-opus-5-5", 1_000_000, 1_000_000) == 24.00
+    assert calculate_cost("claude-opus-5", 1_000_000, 1_000_000) == 30.00
+
+
 def test_calculate_cost_unknown_model():
     """Test cost calculation for unknown model."""
     cost = calculate_cost("unknown-model", input_tokens=1000, output_tokens=1000)
