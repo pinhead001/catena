@@ -6,9 +6,12 @@ from unittest.mock import AsyncMock
 import anthropic as anthropic_module
 import openai as openai_module
 import pytest
+from anthropic.types import MessageParam
+from openai.types.chat import ChatCompletionMessageParam
+from pydantic import TypeAdapter
 
 from catena import providers
-from catena.models import Message
+from catena.models import Message, ToolCall
 from catena.providers import AnthropicProvider, OpenAIProvider
 
 # --- OpenAI fakes ---------------------------------------------------------
@@ -323,3 +326,131 @@ def test_provider_factories_can_be_called_repeatedly(monkeypatch):
     for _ in range(2):
         assert isinstance(providers.openai(), OpenAIProvider)
         assert isinstance(providers.anthropic(), AnthropicProvider)
+
+
+# --- Tool round trips, checked against the SDKs' own request types ------------
+
+_TOOL_HISTORY = [
+    Message.system("Be terse."),
+    Message.user("Weather in NYC and LA?"),
+    Message.assistant(
+        "Checking.",
+        tool_calls=[
+            ToolCall(id="c1", name="get_weather", arguments={"city": "NYC"}),
+            ToolCall(id="c2", name="get_weather", arguments={"city": "LA"}),
+        ],
+    ),
+    Message.tool("72F", tool_call_id="c1"),
+    Message.tool("85F", tool_call_id="c2"),
+]
+
+
+def _fake_openai_create(monkeypatch) -> AsyncMock:
+    create = AsyncMock(return_value=_FakeCompletion(content="ok"))
+    fake_client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create)))
+    monkeypatch.setattr(openai_module, "AsyncOpenAI", lambda **kwargs: fake_client)
+    return create
+
+
+@pytest.mark.asyncio
+async def test_openai_sends_tool_calls_and_results_in_api_format(monkeypatch):
+    create = _fake_openai_create(monkeypatch)
+
+    await OpenAIProvider(api_key="test").complete(_TOOL_HISTORY)
+
+    sent = create.call_args.kwargs["messages"]
+    adapter = TypeAdapter(list[ChatCompletionMessageParam])
+    list(adapter.validate_python(sent)[2]["tool_calls"])  # iterables validate when read
+    assert sent[2] == {
+        "role": "assistant",
+        "content": "Checking.",
+        "tool_calls": [
+            {
+                "id": "c1",
+                "type": "function",
+                "function": {"name": "get_weather", "arguments": '{"city": "NYC"}'},
+            },
+            {
+                "id": "c2",
+                "type": "function",
+                "function": {"name": "get_weather", "arguments": '{"city": "LA"}'},
+            },
+        ],
+    }
+    assert sent[3] == {"role": "tool", "tool_call_id": "c1", "content": "72F"}
+    assert sent[4] == {"role": "tool", "tool_call_id": "c2", "content": "85F"}
+
+
+@pytest.mark.asyncio
+async def test_openai_sends_temperature_and_max_tokens_only_when_given(monkeypatch):
+    create = _fake_openai_create(monkeypatch)
+    provider = OpenAIProvider(api_key="test")
+
+    await provider.complete([Message.user("hi")])
+    assert "temperature" not in create.call_args.kwargs
+    assert "max_tokens" not in create.call_args.kwargs
+
+    await provider.complete([Message.user("hi")], temperature=0.2, max_tokens=50)
+    assert create.call_args.kwargs["temperature"] == 0.2
+    assert create.call_args.kwargs["max_tokens"] == 50
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["auto", "none", "required"])
+async def test_openai_passes_tool_choice_modes_through(monkeypatch, mode):
+    create = _fake_openai_create(monkeypatch)
+
+    await OpenAIProvider(api_key="test").complete([Message.user("hi")], tool_choice=mode)
+
+    assert create.call_args.kwargs["tool_choice"] == mode
+
+
+@pytest.mark.asyncio
+async def test_anthropic_sends_tool_calls_and_results_in_api_format(monkeypatch):
+    create = _fake_anthropic_create(monkeypatch)
+
+    await AnthropicProvider(api_key="test").complete(_TOOL_HISTORY)
+
+    sent = create.call_args.kwargs["messages"]
+    adapter = TypeAdapter(list[MessageParam])
+    for message in adapter.validate_python(sent):
+        if not isinstance(message["content"], str):
+            list(message["content"])  # iterables validate when read
+    assert create.call_args.kwargs["system"] == "Be terse."
+    assert sent == [
+        {"role": "user", "content": "Weather in NYC and LA?"},
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "text", "text": "Checking."},
+                {"type": "tool_use", "id": "c1", "name": "get_weather", "input": {"city": "NYC"}},
+                {"type": "tool_use", "id": "c2", "name": "get_weather", "input": {"city": "LA"}},
+            ],
+        },
+        # Both results travel in one user message, as the API requires.
+        {
+            "role": "user",
+            "content": [
+                {"type": "tool_result", "tool_use_id": "c1", "content": "72F"},
+                {"type": "tool_result", "tool_use_id": "c2", "content": "85F"},
+            ],
+        },
+    ]
+
+
+@pytest.mark.asyncio
+async def test_anthropic_tool_choice_none_and_required(monkeypatch):
+    create = _fake_anthropic_create(monkeypatch)
+    provider = AnthropicProvider(api_key="test")
+
+    await provider.complete([Message.user("hi")], tool_choice="none")
+    assert create.call_args.kwargs["tool_choice"] == {"type": "none"}
+    assert "system" not in create.call_args.kwargs
+
+    await provider.complete([Message.user("hi")], tool_choice="required")
+    assert create.call_args.kwargs["tool_choice"] == {"type": "auto"}
+    assert create.call_args.kwargs["system"] == "Respond by calling one of the available tools."
+
+    await provider.complete([Message.user("hi")], tool_choice="auto")
+    assert create.call_args.kwargs["tool_choice"] == {"type": "auto"}
+    assert "system" not in create.call_args.kwargs

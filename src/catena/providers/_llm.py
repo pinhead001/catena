@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Any
 from catena.models import Message, Response, Role, StreamChunk, ToolCall, Usage, calculate_cost
 from catena.providers.base import Provider
 from catena.structured import StructuredOutputError, StructuredResponse, T
-from catena.tools import Tool
+from catena.tools import Tool, tool_choice_instruction
 
 if TYPE_CHECKING:
     from pydantic import BaseModel
@@ -145,9 +145,8 @@ class LLMProvider(Provider):
             name = "max_output_tokens" if "max_tokens" not in fields else "max_tokens"
             options[name] = max_tokens
 
-        # llm has no tool_choice setting, so ask for the tool in the system prompt.
-        instruction = f"Respond by calling the {tool_choice} tool." if tool_choice else None
-        kwargs = self._turn_kwargs(messages, instruction)
+        # llm has no tool_choice setting, so it goes in the system prompt.
+        kwargs = self._turn_kwargs(messages, tool_choice_instruction(tool_choice))
         kwargs["stream"] = stream
 
         if tools:

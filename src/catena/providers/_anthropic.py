@@ -8,20 +8,41 @@ from typing import Any
 
 from catena.models import Message, Response, Role, StreamChunk, ToolCall, Usage, calculate_cost
 from catena.providers.base import Provider
-from catena.tools import Tool
+from catena.tools import Tool, tool_choice_instruction
 
 
 def _split_system_and_messages(
     messages: list[Message], system: str | None
 ) -> tuple[str | None, list[dict[str, Any]]]:
     """Collect system text and convert the rest to Anthropic's format."""
-    system_parts = []
-    chat_messages = []
+    system_parts: list[str] = []
+    chat_messages: list[dict[str, Any]] = []
 
     for msg in messages:
         role = msg.role.value if isinstance(msg.role, Role) else msg.role
         if role == "system":
             system_parts.append(msg.content)
+        elif role == "tool":
+            result = {
+                "type": "tool_result",
+                "tool_use_id": msg.tool_call_id,
+                "content": msg.content,
+            }
+            previous = chat_messages[-1] if chat_messages else None
+            # The API wants all results for one assistant turn in a single user message.
+            if previous and previous["role"] == "user" and isinstance(previous["content"], list):
+                previous["content"].append(result)
+            else:
+                chat_messages.append({"role": "user", "content": [result]})
+        elif role == "assistant" and msg.tool_calls:
+            blocks: list[dict[str, Any]] = (
+                [{"type": "text", "text": msg.content}] if msg.content else []
+            )
+            blocks += [
+                {"type": "tool_use", "id": call.id, "name": call.name, "input": call.arguments}
+                for call in msg.tool_calls
+            ]
+            chat_messages.append({"role": "assistant", "content": blocks})
         else:
             chat_messages.append({"role": role, "content": msg.content})
 
@@ -106,12 +127,15 @@ class AnthropicProvider(Provider):
 
         if tools:
             kwargs["tools"] = [t.to_anthropic() for t in tools]
-        if tool_choice:
+        if tool_choice == "none":
+            kwargs["tool_choice"] = {"type": "none"}
+        elif tool_choice:
             # Current Claude models reject forced tool_choice ("tool"/"any") with a 400,
-            # so ask for the tool in the system prompt and leave the choice on auto.
+            # so ask in the system prompt and leave the choice on auto.
             kwargs["tool_choice"] = {"type": "auto"}
-            instruction = f"Respond by calling the {tool_choice} tool."
-            system = f"{system}\n\n{instruction}" if system else instruction
+            instruction = tool_choice_instruction(tool_choice)
+            if instruction:
+                system = f"{system}\n\n{instruction}" if system else instruction
 
         response = await self._client.messages.create(
             **_request_kwargs(model_name, messages, system, temperature, max_tokens),

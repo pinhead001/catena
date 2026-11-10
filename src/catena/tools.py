@@ -119,6 +119,20 @@ def tool(func: Callable[..., Any] | None = None, *, name: str | None = None) -> 
     return decorator
 
 
+def tool_choice_instruction(tool_choice: str | None) -> str | None:
+    """System-prompt wording of a tool_choice, for models that cannot be forced.
+
+    `tool_choice` is "auto", "none", "required", or the name of one tool.
+    """
+    if tool_choice is None or tool_choice == "auto":
+        return None
+    if tool_choice == "none":
+        return "Do not call any tools; answer in text."
+    if tool_choice == "required":
+        return "Respond by calling one of the available tools."
+    return f"Respond by calling the {tool_choice} tool."
+
+
 async def run_tool_calls(tools: list[Tool], tool_calls: list[Any]) -> list[Any]:
     """Execute a batch of tool calls against a list of available tools.
 

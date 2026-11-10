@@ -26,7 +26,7 @@ class Provider(ABC):
         messages: list[Message],
         *,
         model: str | None = None,
-        temperature: float = 0.7,
+        temperature: float | None = None,
         max_tokens: int | None = None,
         tools: list[Tool] | None = None,
         tool_choice: str | None = None,
@@ -37,10 +37,10 @@ class Provider(ABC):
         Args:
             messages: Conversation history
             model: Model to use (provider-specific)
-            temperature: Sampling temperature (0-1)
+            temperature: Sampling temperature; the model's default when omitted
             max_tokens: Maximum tokens to generate
             tools: Tools the model may call
-            tool_choice: Name of a tool the model must call
+            tool_choice: "auto", "none", "required", or the name of one tool to call
             **kwargs: Provider-specific options
 
         Returns:
@@ -54,7 +54,7 @@ class Provider(ABC):
         messages: list[Message],
         *,
         model: str | None = None,
-        temperature: float = 0.7,
+        temperature: float | None = None,
         max_tokens: int | None = None,
         **kwargs: Any,
     ) -> AsyncIterator[StreamChunk]:
