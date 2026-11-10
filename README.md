@@ -269,18 +269,22 @@ Chain(name: str = "chain")
 # Decorator to add steps
 @chain.step(
     name: str = None,      # Step name (defaults to function name)
-    retries: int = 3,      # Retry attempts
-    retry_delay: float = 1.0,  # Base delay between retries
-    timeout: float = None, # Timeout in seconds
+    retries: int = 3,      # Tries after the first failure (0 = run once)
+    retry_delay: float = 1.0,  # Seconds before the first retry; doubles each time
+    timeout: float = None, # Timeout per attempt, in seconds
 )
 
 # Run the chain
 await chain.run(
     input: str | list[Message] | Context,
-    context: Context = None,
+    context: Context = None,  # Continue from an earlier result; input is added to it
 ) -> Context
 
-# Compose chains
+# Hooks: "before_step", "after_step", "on_error"
+@chain.on("after_step")
+def log(name, ctx, duration): ...
+
+# Compose chains (steps and hooks of both)
 combined = chain1 >> chain2 >> chain3
 ```
 

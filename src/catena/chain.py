@@ -27,7 +27,10 @@ class StepConfig:
     retries: int = 3
     retry_delay: float = 1.0
     timeout: float | None = None
-    cache: bool = False
+
+    def __post_init__(self) -> None:
+        if self.retries < 0:
+            raise ValueError(f"retries must be >= 0, got {self.retries}")
 
 
 @dataclass
@@ -38,28 +41,31 @@ class Step:
     config: StepConfig
 
     async def execute(self, ctx: Context) -> Context:
-        """Execute this step with retries."""
-        last_error: Exception | None = None
+        """Run the step once, then up to `retries` more times if it fails."""
+        attempts = self.config.retries + 1
 
-        for attempt in range(self.config.retries):
+        for attempt in range(attempts):
+            # Each attempt gets its own copy, so a failed attempt's changes
+            # (a message it added before the call failed) don't leak into the next.
+            attempt_ctx = ctx.clone()
             try:
                 if self.config.timeout:
                     return await asyncio.wait_for(
-                        self.func(ctx),
+                        self.func(attempt_ctx),
                         timeout=self.config.timeout,
                     )
-                return await self.func(ctx)
+                return await self.func(attempt_ctx)
             except asyncio.TimeoutError:
-                last_error = TimeoutError(
+                last_error: Exception = TimeoutError(
                     f"Step '{self.config.name}' timed out after {self.config.timeout}s"
                 )
             except Exception as e:
                 last_error = e
 
-            if attempt < self.config.retries - 1:
+            if attempt < attempts - 1:
                 await asyncio.sleep(self.config.retry_delay * (2**attempt))
 
-        raise last_error or RuntimeError(f"Step '{self.config.name}' failed")
+        raise last_error
 
 
 class Chain:
@@ -97,9 +103,12 @@ class Chain:
         retries: int = 3,
         retry_delay: float = 1.0,
         timeout: float | None = None,
-        cache: bool = False,
     ) -> Callable[[StepFunc | SyncStepFunc], StepFunc]:
-        """Decorator to register a step in the chain."""
+        """Decorator to register a step in the chain.
+
+        `retries` is how many times to try again after a failure, with
+        exponential backoff starting at `retry_delay` seconds; 0 runs the step once.
+        """
 
         def decorator(func: StepFunc | SyncStepFunc) -> StepFunc:
             step_name = name or func.__name__
@@ -121,7 +130,6 @@ class Chain:
                 retries=retries,
                 retry_delay=retry_delay,
                 timeout=timeout,
-                cache=cache,
             )
             self.steps.append(Step(func=wrapped, config=config))
             return wrapped
@@ -133,11 +141,12 @@ class Chain:
         self.steps.append(step)
 
     def on(self, event: str) -> Callable[[T], T]:
-        """Register an event hook."""
+        """Register a hook for "before_step", "after_step" or "on_error"."""
+        if event not in self._hooks:
+            raise ValueError(f"Unknown event {event!r}; choose from {sorted(self._hooks)}")
 
         def decorator(func: T) -> T:
-            if event in self._hooks:
-                self._hooks[event].append(func)  # type: ignore
+            self._hooks[event].append(func)  # type: ignore
             return func
 
         return decorator
@@ -158,22 +167,21 @@ class Chain:
 
         Args:
             input: Initial input - can be a string, list of messages, or context
-            context: Optionally provide an existing context
+            context: An existing context to continue from; `input` is added to it
 
         Returns:
             The final context after all steps complete
         """
-        # Build initial context
-        if context is not None:
-            ctx = context.clone()
-        elif isinstance(input, Context):
-            ctx = input.clone()
-        elif isinstance(input, list):
-            ctx = Context(messages=input.copy())
-        elif isinstance(input, str):
-            ctx = Context(messages=[Message.user(input)])
-        else:
-            ctx = Context()
+        if isinstance(input, Context):
+            if context is not None:
+                raise ValueError("Pass a Context as input or as context, not both")
+            context, input = input, None
+
+        ctx = context.clone() if context is not None else Context()
+        if isinstance(input, str):
+            ctx.add_message(Message.user(input))
+        elif input is not None:
+            ctx.messages.extend(input)
 
         # Execute steps
         for step in self.steps:
@@ -191,9 +199,17 @@ class Chain:
         return ctx
 
     def __rshift__(self, other: Chain) -> Chain:
-        """Compose chains with >> operator."""
+        """Compose chains with >>: the steps of both, and the hooks of both.
+
+        Hooks apply to every step of the composed chain; one registered on
+        both chains is kept once.
+        """
         composed = Chain(name=f"{self.name}>>{other.name}")
         composed.steps = self.steps + other.steps
+        for event, hooks in composed._hooks.items():
+            for hook in self._hooks[event] + other._hooks[event]:
+                if not any(hook is kept for kept in hooks):
+                    hooks.append(hook)
         return composed
 
 
