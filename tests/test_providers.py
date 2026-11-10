@@ -7,9 +7,9 @@ import anthropic as anthropic_module
 import openai as openai_module
 import pytest
 
+from catena import providers
 from catena.models import Message
-from catena.providers.anthropic import AnthropicProvider
-from catena.providers.openai import OpenAIProvider
+from catena.providers import AnthropicProvider, OpenAIProvider
 
 # --- OpenAI fakes ---------------------------------------------------------
 
@@ -313,3 +313,13 @@ async def test_anthropic_stream_yields_deltas_and_usage(monkeypatch):
     assert final is not None
     assert final.usage.input_tokens == 5
     assert "temperature" not in stream_kwargs
+
+
+def test_provider_factories_can_be_called_repeatedly(monkeypatch):
+    """The factories must survive their own provider modules being imported."""
+    monkeypatch.setenv("OPENAI_API_KEY", "test")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test")
+
+    for _ in range(2):
+        assert isinstance(providers.openai(), OpenAIProvider)
+        assert isinstance(providers.anthropic(), AnthropicProvider)
