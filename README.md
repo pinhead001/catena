@@ -42,11 +42,11 @@ print(f"Cost: ${result.usage.cost_usd:.4f}")
 pip install catena-ai
 
 # With provider support
-pip install catena-ai[openai]
-pip install catena-ai[anthropic]
-pip install catena-ai[structured]  # Pydantic, for structured output
-pip install catena-ai[llm]         # any model with an `llm` plugin
-pip install catena-ai[all]
+pip install "catena-ai[openai]"
+pip install "catena-ai[anthropic]"
+pip install "catena-ai[structured]"  # Pydantic, for structured output
+pip install "catena-ai[llm]"         # any model with an `llm` plugin
+pip install "catena-ai[all]"
 ```
 
 ## Quick Start

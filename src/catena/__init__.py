@@ -8,7 +8,7 @@ from catena.providers.base import Provider
 from catena.structured import StructuredOutputError, StructuredResponse
 from catena.tools import Tool, ToolLoopError, ToolRun, tool
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"
 __all__ = [
     "Chain",
     "step",

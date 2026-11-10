@@ -98,7 +98,13 @@ class Provider(ABC):
             result.output.amount  # float
             ```
         """
-        from pydantic import ValidationError
+        try:
+            from pydantic import ValidationError
+        except ImportError:
+            raise ImportError(
+                "Structured output needs Pydantic. "
+                'Install with: pip install "catena-ai[structured]"'
+            ) from None
 
         if retries < 0:
             raise ValueError(f"retries must be >= 0, got {retries}")
