@@ -392,3 +392,59 @@ def test_annotated_with_unhashable_metadata_still_builds_a_schema():
     props = _parameters(f)["properties"]
 
     assert props == {"count": {"type": "integer"}, "nothing": {"type": "null"}}
+
+
+@pytest.mark.asyncio
+async def test_arguments_are_converted_to_the_annotated_types():
+    import enum
+
+    from pydantic import BaseModel
+
+    class Color(enum.Enum):
+        RED = "red"
+
+    class Address(BaseModel):
+        city: str
+
+    received = {}
+
+    @tool
+    def save(address: Address, color: Color, count: int, tags: list[str], note=None) -> str:
+        received.update(address=address, color=color, count=count, tags=tags, note=note)
+        return "saved"
+
+    arguments = {
+        "address": {"city": "Tokyo"},
+        "color": "red",
+        "count": "3",
+        "tags": ["a"],
+        "note": 5,
+    }
+    results = await run_tool_calls([save], [ToolCall(id="c1", name="save", arguments=arguments)])
+
+    assert results == [("c1", "saved")]
+    assert received == {
+        "address": Address(city="Tokyo"),
+        "color": Color.RED,
+        "count": 3,
+        "tags": ["a"],
+        "note": 5,  # unannotated: passed through untouched
+    }
+
+
+@pytest.mark.asyncio
+async def test_unconvertible_arguments_are_reported_to_the_model_without_calling_the_tool():
+    calls = []
+
+    @tool
+    def repeat(times: int) -> str:
+        calls.append(times)
+        return "x" * times
+
+    results = await run_tool_calls(
+        [repeat], [ToolCall(id="c1", name="repeat", arguments={"times": "many"})]
+    )
+
+    assert calls == []
+    assert results[0][1].startswith("Error:")
+    assert "times" in results[0][1] or "integer" in results[0][1]

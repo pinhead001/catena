@@ -82,6 +82,22 @@ def _schema_for_type(annotation: Any, defs: dict[str, Any]) -> dict[str, Any]:
     return {}  # Any, or a type with no JSON equivalent: no constraint
 
 
+def _convert(value: Any, annotation: Any) -> Any:
+    """Convert a JSON value from the model to a parameter's annotated type."""
+    try:
+        from pydantic import PydanticSchemaGenerationError, PydanticUserError, TypeAdapter
+    except ImportError:
+        # Without Pydantic, values pass through as JSON, except Enum members.
+        if isinstance(annotation, type) and issubclass(annotation, enum.Enum):
+            return annotation(value)
+        return value
+    try:
+        adapter = TypeAdapter(annotation)
+    except (PydanticSchemaGenerationError, PydanticUserError):
+        return value  # a type Pydantic cannot describe: pass the value through
+    return adapter.validate_python(value)
+
+
 def _split_docstring(doc: str) -> tuple[str, dict[str, str]]:
     """Split a docstring into its summary and its per-argument descriptions.
 
@@ -119,10 +135,8 @@ def _indent(line: str) -> int:
     return len(line) - len(line.lstrip())
 
 
-def _build_parameters_schema(
-    func: Callable[..., Any], descriptions: dict[str, str] | None = None
-) -> dict[str, Any]:
-    """Derive a JSON schema for a function's parameters from its signature."""
+def _parameter_types(func: Callable[..., Any]) -> dict[str, Any]:
+    """The type hints of a function's parameters (those that can be resolved)."""
     signature = inspect.signature(func)
     try:
         hints = get_type_hints(func, include_extras=True)
@@ -134,6 +148,15 @@ def _build_parameters_schema(
             for name, param in signature.parameters.items()
             if param.annotation is not param.empty and not isinstance(param.annotation, str)
         }
+    return {name: hint for name, hint in hints.items() if name in signature.parameters}
+
+
+def _build_parameters_schema(
+    func: Callable[..., Any], descriptions: dict[str, str] | None = None
+) -> dict[str, Any]:
+    """Derive a JSON schema for a function's parameters from its signature."""
+    signature = inspect.signature(func)
+    hints = _parameter_types(func)
 
     properties: dict[str, Any] = {}
     required: list[str] = []
@@ -178,12 +201,30 @@ class Tool:
     description: str
     parameters: dict[str, Any] = field(default_factory=lambda: {"type": "object", "properties": {}})
     func: Callable[..., Any] | None = None
+    argument_types: dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
+    """The function's type hints, used to convert the model's JSON arguments."""
 
     async def call(self, **kwargs: Any) -> Any:
-        """Invoke the underlying function, awaiting it if necessary."""
+        """Invoke the underlying function, awaiting it if necessary.
+
+        Arguments arrive from the model as JSON. With `@tool`, each is first
+        converted to the parameter's annotated type: a dict becomes the
+        Pydantic model, a string the Enum member, "3" the int. A value that
+        cannot be converted raises, which `run_tool_calls` reports to the model.
+        """
         if self.func is None:
             raise ValueError(f"Tool '{self.name}' has no callable attached")
-        result = self.func(**kwargs)
+        converted = {}
+        for name, value in kwargs.items():
+            try:
+                converted[name] = (
+                    _convert(value, self.argument_types[name])
+                    if name in self.argument_types
+                    else value
+                )
+            except ValueError as e:  # includes Pydantic's ValidationError
+                raise ValueError(f"Invalid value for argument '{name}': {e}") from e
+        result = self.func(**converted)
         if inspect.isawaitable(result):
             return await result
         return result
@@ -224,6 +265,7 @@ def tool(func: Callable[..., Any] | None = None, *, name: str | None = None) -> 
             description=description,
             parameters=_build_parameters_schema(f, arguments),
             func=f,
+            argument_types=_parameter_types(f),
         )
 
     if func is not None:

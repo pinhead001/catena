@@ -231,7 +231,7 @@ print(run.turns)            # 2 model calls: one to ask for the tool, one to ans
 print(run.usage.cost_usd)   # total across both
 ```
 
-`run_tools` calls the model, runs the tools it asks for (in parallel), sends the results back, and repeats until the model answers. A tool that raises is reported to the model so it can recover. `max_turns` (default 10) caps the number of model calls; beyond it `ToolLoopError` is raised, carrying the conversation and cost so far.
+`run_tools` calls the model, runs the tools it asks for (in parallel), sends the results back, and repeats until the model answers. Arguments are converted to the types you annotated (a dict becomes your Pydantic model, a string your Enum). A tool that raises, or arguments that don't fit, are reported to the model so it can recover. `max_turns` (default 10) caps the number of model calls; beyond it `ToolLoopError` is raised, carrying the conversation and cost so far.
 
 Inside a chain step, keep the whole exchange in the context:
 

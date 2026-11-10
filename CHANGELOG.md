@@ -10,8 +10,9 @@
 - **Tool loop**: `provider.run_tools(messages, tools=[...])` calls the model,
   runs the tools it asks for, and repeats until it answers.
 - **Better tool schemas**: `@tool` describes lists, dicts, optionals, `Literal`,
-  `Enum` and Pydantic models to the model, and takes argument descriptions from
-  the docstring's `Args:` section.
+  `Enum` and Pydantic models to the model, takes argument descriptions from
+  the docstring's `Args:` section, and converts the model's JSON arguments to
+  the annotated types before calling your function.
 - **Observers**: `chain.observe(TraceCollector())` or `ConsoleObserver()` records
   every run, with the time, tokens and cost of each step.
 - **Persistent cache**: `SQLiteCache("file.db")` keeps answers between runs.
