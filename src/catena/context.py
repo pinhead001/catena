@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 from catena.models import Message, Usage
@@ -39,9 +39,12 @@ class Context:
         self.data[key] = value
 
     def clone(self) -> Context:
-        """Create a shallow copy of the context."""
+        """Copy the context so changes to the copy leave this one alone.
+
+        Messages are copied; values in `data` are shared, not copied.
+        """
         return Context(
-            messages=self.messages.copy(),
+            messages=[replace(message) for message in self.messages],
             data=self.data.copy(),
             usage=Usage(
                 input_tokens=self.usage.input_tokens,

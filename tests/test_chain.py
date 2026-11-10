@@ -277,3 +277,60 @@ async def test_composed_chain_keeps_hooks_from_both_chains():
     await (first >> second).run()
 
     assert events == ["shared:s1", "second:s1", "shared:s2", "second:s2"]
+
+
+@pytest.mark.asyncio
+async def test_standalone_step_is_reusable_across_chains():
+    from catena import step
+
+    runs = []
+
+    @step(name="count", retries=1, retry_delay=0)
+    async def count(ctx: Context) -> Context:
+        runs.append(1)
+        if len(runs) == 1:
+            raise RuntimeError("boom")
+        ctx.set("n", ctx.get("n", 0) + 1)
+        return ctx
+
+    @step
+    def sync_count(ctx: Context) -> Context:
+        ctx.set("n", ctx.get("n", 0) + 10)
+        return ctx
+
+    first, second = Chain(), Chain()
+    first.add_step(count)
+    first.add_step(sync_count)
+    second.add_step(count)
+
+    assert (await first.run()).get("n") == 11  # retried once, per the step's own config
+    assert (await second.run()).get("n") == 1
+    assert [s.config.name for s in first.steps] == ["count", "sync_count"]
+
+
+def test_add_step_rejects_an_undecorated_function():
+    async def plain(ctx: Context) -> Context:
+        return ctx
+
+    with pytest.raises(TypeError, match="@step"):
+        Chain().add_step(plain)
+
+
+@pytest.mark.asyncio
+async def test_step_changing_a_message_does_not_change_the_callers_message():
+    chain = Chain()
+    question = Message.user("doc")
+    attempts = []
+
+    @chain.step(retries=1, retry_delay=0)
+    async def wrap(ctx: Context) -> Context:
+        ctx.messages[0].content = f"Summarize: {ctx.messages[0].content}"
+        attempts.append(1)
+        if len(attempts) == 1:
+            raise RuntimeError("boom")
+        return ctx
+
+    result = await chain.run([question])
+
+    assert question.content == "doc"
+    assert result.messages[0].content == "Summarize: doc"  # wrapped once, not twice

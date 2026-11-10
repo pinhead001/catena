@@ -87,3 +87,45 @@ def test_stream_chunk_defaults():
     assert chunk.delta == "hello"
     assert chunk.done is False
     assert chunk.usage is None
+
+
+def test_fable_5_2_is_priced_separately_from_fable_5():
+    assert calculate_cost("claude-fable-5-2", 1_000_000, 1_000_000) == 48.0
+    assert calculate_cost("claude-fable-5", 1_000_000, 1_000_000) == 60.0
+
+
+def test_set_price_takes_effect_for_matching_model_ids(monkeypatch):
+    from catena import models
+
+    monkeypatch.setattr(models, "PRICING", dict(models.PRICING))
+    assert calculate_cost("My-Model-2026-01-01", 1_000_000, 0) == 0.0
+
+    models.set_price("my-model", 0.5, 1.5)
+
+    assert calculate_cost("My-Model-2026-01-01", 1_000_000, 1_000_000) == 2.0
+    # A longer, more specific name still wins.
+    models.set_price("my-model-mini", 0.1, 0.1)
+    assert calculate_cost("my-model-mini", 1_000_000, 0) == 0.1
+
+
+def test_usage_subtraction_and_total_tokens():
+    spent = Usage(input_tokens=300, output_tokens=150, cost_usd=0.03)
+    before = Usage(input_tokens=100, output_tokens=50, cost_usd=0.01)
+
+    added = spent - before
+
+    assert (added.input_tokens, added.output_tokens) == (200, 100)
+    assert added.total_tokens == 300
+
+
+def test_context_clone_copies_messages():
+    from catena import Context
+
+    original = Context(messages=[Message.user("hi")])
+
+    copy = original.clone()
+    copy.messages[0].content = "changed"
+    copy.add_message(Message.assistant("more"))
+
+    assert original.messages[0].content == "hi"
+    assert len(original.messages) == 1

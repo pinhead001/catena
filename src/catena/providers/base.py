@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
-from typing import Any
+from typing import TYPE_CHECKING, Any, TypeVar
 
 from catena.models import Message, Response, StreamChunk, Usage
 from catena.structured import (
@@ -16,6 +16,11 @@ from catena.structured import (
     schema_tool,
 )
 from catena.tools import Tool, ToolLoopError, ToolRun, run_tool_calls
+
+if TYPE_CHECKING:
+    from catena.middleware.cache import Cache
+
+ProviderT = TypeVar("ProviderT", bound="Provider")
 
 
 class Provider(ABC):
@@ -192,6 +197,20 @@ class Provider(ABC):
             messages=history,
             usage=usage,
         )
+
+    def cached(self: ProviderT, cache: Cache, ttl: float | None = None) -> ProviderT:
+        """Serve repeated `complete()` calls from `cache`; returns this provider.
+
+        Covers everything built on `complete()`: `run_tools()` and
+        `complete_structured()` too. Streaming is not cached.
+
+        Example:
+            ```python
+            provider = providers.openai().cached(MemoryCache())
+            ```
+        """
+        self.complete = cache.wrap(self.complete, ttl)  # type: ignore[method-assign]
+        return self
 
     async def __aenter__(self) -> Provider:
         return self

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import functools
+import inspect
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -141,8 +142,26 @@ class Chain:
 
         return decorator
 
-    def add_step(self, step: Step) -> None:
-        """Add a pre-configured step."""
+    def add_step(self, step: Step | StepFunc) -> None:
+        """Add a `Step`, or a function made reusable with the standalone `@step`.
+
+        Example:
+            ```python
+            @step(retries=1)
+            async def summarize(ctx: Context) -> Context: ...
+
+            drafts.add_step(summarize)
+            reports.add_step(summarize)
+            ```
+        """
+        if not isinstance(step, Step):
+            config = getattr(step, "_step_config", None)
+            if config is None:
+                raise TypeError(
+                    f"{getattr(step, '__name__', step)!r} is not a step; "
+                    "decorate it with @step or use @chain.step()"
+                )
+            step = Step(func=step, config=config)
         self.steps.append(step)
 
     def on(self, event: str) -> Callable[[T], T]:
@@ -275,12 +294,13 @@ def step(
     retry_delay: float = 1.0,
     timeout: float | None = None,
 ) -> StepFunc | Callable[[StepFunc], StepFunc]:
-    """Standalone decorator for creating reusable steps."""
+    """Make a function a reusable step; add it to chains with `chain.add_step()`."""
 
     def decorator(f: StepFunc) -> StepFunc:
         @functools.wraps(f)
         async def wrapper(ctx: Context) -> Context:
-            return await f(ctx)
+            result = f(ctx)
+            return await result if inspect.isawaitable(result) else result  # sync steps too
 
         wrapper._step_config = StepConfig(  # type: ignore
             name=name or f.__name__,

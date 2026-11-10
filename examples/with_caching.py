@@ -7,13 +7,9 @@ from catena.middleware import MemoryCache
 
 
 async def main():
-    # Create provider with caching
-    provider = providers.openai(model="gpt-4o-mini")
+    # Repeated calls with the same input are answered from the cache
     cache = MemoryCache(max_size=100, default_ttl=3600)
-
-    # Wrap the provider's complete method with caching
-    original_complete = provider.complete
-    provider.complete = cache.wrap(original_complete)
+    provider = providers.openai(model="gpt-4o-mini").cached(cache)
 
     chain = Chain(name="cached-qa")
 

@@ -113,11 +113,25 @@ print(f"Processed {len(results)} docs for ${total_cost:.2f}")
 from catena.middleware import MemoryCache
 
 cache = MemoryCache(max_size=1000, default_ttl=3600)
-provider.complete = cache.wrap(provider.complete)
+provider = providers.openai().cached(cache)
 
 # First call hits API, second call is free
 await chain.run("What is 2+2?")  # Costs $0.0001
 await chain.run("What is 2+2?")  # Costs $0.0000
+
+cache.hit_rate  # 0.5
+```
+
+A call is served from the cache only when everything that shapes the answer matches: messages, model, system prompt, tools, and options. Tool loops and structured output are cached too; streaming is not.
+
+### Cost Tracking
+
+Every response carries its token counts and cost, and `ctx.add_usage()` totals them across a chain. Prices for current OpenAI and Anthropic models are built in; a model with no known price is tracked at $0, so add your own:
+
+```python
+from catena.models import set_price
+
+set_price("my-model", 0.50, 1.50)  # USD per million input / output tokens
 ```
 
 ### Context & State

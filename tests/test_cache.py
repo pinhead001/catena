@@ -189,3 +189,38 @@ async def test_stats_and_clear():
 
     await cache.clear()
     assert await cache.get("k") is None
+
+
+@pytest.mark.asyncio
+async def test_provider_cached_covers_complete_and_what_is_built_on_it():
+    from catena import Provider, tool
+
+    class Echo(Provider):
+        default_model = "echo"
+        calls = 0
+
+        async def complete(self, messages, **kwargs):  # type: ignore[no-untyped-def]
+            self.calls += 1
+            return Response(content="hi", usage=Usage(cost_usd=0.01))
+
+        async def stream(self, messages, **kwargs):  # type: ignore[no-untyped-def]
+            raise NotImplementedError
+            yield
+
+    @tool
+    def noop() -> str:
+        """Do nothing."""
+        return ""
+
+    cache = MemoryCache()
+    provider = Echo().cached(cache)
+
+    await provider.complete([Message.user("hi")])
+    again = await provider.complete([Message.user("hi")])
+    run = await provider.run_tools([Message.user("hi")], tools=[noop])
+    rerun = await provider.run_tools([Message.user("hi")], tools=[noop])
+
+    assert isinstance(provider, Echo)
+    assert provider.calls == 2  # one plain call, one with tools; the repeats were cached
+    assert again.usage.cost_usd == 0
+    assert (run.usage.cost_usd, rerun.usage.cost_usd) == (0.01, 0)
