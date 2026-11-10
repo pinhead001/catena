@@ -22,20 +22,18 @@ async def main(model: str | None) -> None:
     @chain.step(retries=2, timeout=60)
     async def draft(ctx: Context) -> Context:
         response = await provider.complete(ctx.messages)
-        ctx.add_message(response.message)
-        ctx.add_usage(response.usage)
+        ctx.add_response(response)
         return ctx
 
     @chain.step(retries=2, timeout=60)
     async def tighten(ctx: Context) -> Context:
         ctx.add_message(Message.user("Now cut that to one sentence."))
         response = await provider.complete(ctx.messages)
-        ctx.add_message(response.message)
-        ctx.add_usage(response.usage)
+        ctx.add_response(response)
         return ctx
 
     result = await chain.run("Explain what a vector database is.")
-    print(result.messages[-1].content)
+    print(result.text)
     print(f"\nTokens: {result.usage.input_tokens} in, {result.usage.output_tokens} out")
     print(f"Cost: ${result.usage.cost_usd:.4f} (0 if the model isn't in Catena's price table)")
 

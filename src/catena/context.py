@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field, replace
 from typing import Any
 
-from catena.models import Message, Usage
+from catena.models import Message, Response, Usage
 
 
 @dataclass
@@ -29,6 +29,16 @@ class Context:
     def add_usage(self, usage: Usage) -> None:
         """Accumulate usage statistics."""
         self.usage = self.usage + usage
+
+    def add_response(self, response: Response) -> None:
+        """Record a model response: its message joins the history, its usage the total."""
+        self.add_message(response.message)
+        self.add_usage(response.usage)
+
+    @property
+    def text(self) -> str:
+        """The text of the latest message ("" if there are none)."""
+        return self.messages[-1].content if self.messages else ""
 
     def get(self, key: str, default: Any = None) -> Any:
         """Get a value from context data."""

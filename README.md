@@ -14,12 +14,11 @@ chain = Chain()
 @chain.step()
 async def analyze(ctx: Context) -> Context:
     response = await provider.complete(ctx.messages)
-    ctx.add_message(response.message)
-    ctx.add_usage(response.usage)
+    ctx.add_response(response)
     return ctx
 
 result = await chain.run("Explain quantum computing")
-print(result.messages[-1].content)
+print(result.text)
 print(f"Cost: ${result.usage.cost_usd:.4f}")
 ```
 
@@ -66,12 +65,11 @@ async def main():
     @chain.step(retries=3, timeout=30.0)
     async def generate(ctx: Context) -> Context:
         response = await provider.complete(ctx.messages)
-        ctx.add_message(response.message)
-        ctx.add_usage(response.usage)
+        ctx.add_response(response)
         return ctx
 
     result = await chain.run("Hello, world!")
-    print(result.messages[-1].content)
+    print(result.text)
 
 asyncio.run(main())
 ```
@@ -133,7 +131,7 @@ A call is served from the cache only when everything that shapes the answer matc
 
 ### Cost Tracking
 
-Every response carries its token counts and cost, and `ctx.add_usage()` totals them across a chain. Prices for current OpenAI and Anthropic models are built in; a model with no known price is tracked at $0, so add your own:
+Every response carries its token counts and cost, and `ctx.add_response()` totals them across a chain. Prices for current OpenAI and Anthropic models are built in; a model with no known price is tracked at $0, so add your own:
 
 ```python
 from catena.models import set_price
@@ -358,8 +356,10 @@ Context(
     usage: Usage = Usage(),
 )
 
+ctx.add_response(response: Response)  # the reply joins the history, its usage the total
 ctx.add_message(message: Message)
 ctx.add_usage(usage: Usage)
+ctx.text                              # text of the latest message
 ctx.get(key: str, default: Any = None) -> Any
 ctx.set(key: str, value: Any)
 ctx.clone() -> Context

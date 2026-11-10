@@ -23,8 +23,7 @@ async def main():
             ),
         )
         response = await fast.complete(ctx.messages)
-        ctx.add_message(response.message)
-        ctx.add_usage(response.usage)
+        ctx.add_response(response)
         ctx.set("research", response.content)
         return ctx
 
@@ -42,8 +41,7 @@ async def main():
             Message.user(f"Based on this research:\n\n{research}\n\nWrite a brief article."),
         ]
         response = await smart.complete(ctx.messages, max_tokens=500)
-        ctx.add_message(response.message)
-        ctx.add_usage(response.usage)
+        ctx.add_response(response)
         return ctx
 
     # Compose chains: research >> write
@@ -53,7 +51,7 @@ async def main():
     result = await pipeline.run("What are the benefits of TypeScript over JavaScript?")
 
     print("=== Final Article ===")
-    print(result.messages[-1].content)
+    print(result.text)
     print(f"\n=== Total Cost: ${result.usage.cost_usd:.4f} ===")
 
 

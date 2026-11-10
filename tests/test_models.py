@@ -129,3 +129,17 @@ def test_context_clone_copies_messages():
 
     assert original.messages[0].content == "hi"
     assert len(original.messages) == 1
+
+
+def test_context_add_response_records_message_and_usage():
+    from catena import Context
+
+    ctx = Context(messages=[Message.user("hi")], usage=Usage(cost_usd=0.01))
+    assert Context().text == ""
+
+    ctx.add_response(Response(content="hello", usage=Usage(input_tokens=3, cost_usd=0.02)))
+
+    assert ctx.text == "hello"
+    assert ctx.messages[-1].role == Role.ASSISTANT
+    assert ctx.usage.cost_usd == 0.03
+    assert ctx.usage.input_tokens == 3
