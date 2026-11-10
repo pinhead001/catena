@@ -73,6 +73,17 @@ def _request_kwargs(
     return request
 
 
+def _tool_kwargs(tools: list[Tool] | None, tool_choice: str | None) -> dict[str, Any]:
+    request: dict[str, Any] = {}
+    if tools:
+        request["tools"] = [t.to_openai() for t in tools]
+    if tool_choice in ("auto", "none", "required"):
+        request["tool_choice"] = tool_choice
+    elif tool_choice:
+        request["tool_choice"] = {"type": "function", "function": {"name": tool_choice}}
+    return request
+
+
 class OpenAIProvider(Provider):
     """OpenAI API provider.
 
@@ -122,15 +133,9 @@ class OpenAIProvider(Provider):
         """
         model_name = model or self.default_model
 
-        if tools:
-            kwargs["tools"] = [t.to_openai() for t in tools]
-        if tool_choice in ("auto", "none", "required"):
-            kwargs["tool_choice"] = tool_choice
-        elif tool_choice:
-            kwargs["tool_choice"] = {"type": "function", "function": {"name": tool_choice}}
-
         response = await self._client.chat.completions.create(
             **_request_kwargs(model_name, messages, temperature, max_tokens),
+            **_tool_kwargs(tools, tool_choice),
             **kwargs,
         )
 
@@ -166,6 +171,8 @@ class OpenAIProvider(Provider):
         model: str | None = None,
         temperature: float | None = None,
         max_tokens: int | None = None,
+        tools: list[Tool] | None = None,
+        tool_choice: str | None = None,
         **kwargs: Any,
     ) -> AsyncIterator[StreamChunk]:
         """Stream a completion using OpenAI."""
@@ -173,6 +180,7 @@ class OpenAIProvider(Provider):
 
         response = await self._client.chat.completions.create(
             **_request_kwargs(model_name, messages, temperature, max_tokens),
+            **_tool_kwargs(tools, tool_choice),
             stream=True,
             stream_options={"include_usage": True},
             **kwargs,
@@ -181,6 +189,10 @@ class OpenAIProvider(Provider):
         finish_reason: str | None = None
         input_tokens = 0
         output_tokens = 0
+        content = ""
+        # Tool calls arrive in pieces keyed by index: the id and name once,
+        # the JSON arguments a fragment at a time.
+        pending: dict[int, dict[str, str]] = {}
 
         async for chunk in response:
             if chunk.usage:
@@ -191,17 +203,35 @@ class OpenAIProvider(Provider):
             choice = chunk.choices[0]
             if choice.finish_reason:
                 finish_reason = choice.finish_reason
+            for piece in getattr(choice.delta, "tool_calls", None) or []:
+                call = pending.setdefault(piece.index, {"id": "", "name": "", "arguments": ""})
+                call["id"] += piece.id or ""
+                if piece.function:
+                    call["name"] += piece.function.name or ""
+                    call["arguments"] += piece.function.arguments or ""
             delta = choice.delta.content or ""
             if delta:
+                content += delta
                 yield StreamChunk(delta=delta)
 
+        usage = Usage(
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            cost_usd=calculate_cost(model_name, input_tokens, output_tokens),
+        )
         yield StreamChunk(
             done=True,
             finish_reason=finish_reason,
-            usage=Usage(
-                input_tokens=input_tokens,
-                output_tokens=output_tokens,
-                cost_usd=calculate_cost(model_name, input_tokens, output_tokens),
+            usage=usage,
+            response=Response(
+                content=content,
+                model=model_name,
+                usage=usage,
+                metadata={"finish_reason": finish_reason},
+                tool_calls=[
+                    _parse_tool_call(call["id"], call["name"], call["arguments"])
+                    for _, call in sorted(pending.items())
+                ],
             ),
         )
 

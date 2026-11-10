@@ -294,6 +294,20 @@ async for chunk in provider.stream([Message.user("Write a haiku")]):
         print(chunk.delta, end="", flush=True)
 ```
 
+The final chunk also carries the complete reply as `chunk.response`, so a step can show text as it arrives and still record the result:
+
+```python
+@chain.step()
+async def answer(ctx: Context) -> Context:
+    async for chunk in provider.stream(ctx.messages):
+        print(chunk.delta, end="", flush=True)
+        if chunk.done:
+            ctx.add_response(chunk.response)
+    return ctx
+```
+
+`stream()` accepts `tools=` and `tool_choice=` like `complete()`; any tool calls the model makes are on `chunk.response.tool_calls`.
+
 ### Any Model, via `llm`
 
 [`llm`](https://llm.datasette.io) reaches dozens of hosted and local models through plugins. `providers.llm()` puts all of them behind Catena's chains, retries, cost tracking and caching. Requires `pip install catena-ai[llm]`.
@@ -415,14 +429,20 @@ await provider.run_tools(
     tool_choice: str = None,  # applies to the first model call only
 ) -> ToolRun  # .content, .response, .messages, .usage, .turns
 
-# Streaming (yields StreamChunk; the last chunk has done=True and `usage`)
+# Streaming (yields StreamChunk; the last chunk has done=True, `usage`,
+# and the complete `response`)
 async for chunk in provider.stream(
     messages: list[Message],
     model: str = None,
     temperature: float = None,
     max_tokens: int = None,
+    tools: list[Tool] = None,
+    tool_choice: str = None,
 ):
     ...
+
+# Cache repeated calls (MemoryCache, SQLiteCache)
+provider = provider.cached(cache: Cache, ttl: float = None)
 ```
 
 ## License

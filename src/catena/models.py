@@ -148,6 +148,8 @@ class StreamChunk:
     done: bool = False
     usage: Usage | None = None
     finish_reason: str | None = None
+    response: Response | None = None
+    """On the final chunk: the complete reply, with its text, tool calls and usage."""
 
 
 # (input, output) USD per 1M tokens. Anthropic prices as of 2026-10; OpenAI as of 2024.

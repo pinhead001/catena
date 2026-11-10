@@ -210,6 +210,10 @@ class LLMProvider(Provider):
             stream=False,
             options=kwargs,
         )
+        return await self._response(llm_response, model_id)
+
+    async def _response(self, llm_response: Any, model_id: str) -> Response:
+        """Read a finished (or not yet started) llm response into a Response."""
         content = await llm_response.text()
         tool_calls = [
             ToolCall(
@@ -233,6 +237,8 @@ class LLMProvider(Provider):
         model: str | None = None,
         temperature: float | None = None,
         max_tokens: int | None = None,
+        tools: list[Tool] | None = None,
+        tool_choice: str | None = None,
         **kwargs: Any,
     ) -> AsyncIterator[StreamChunk]:
         """Stream a completion through llm."""
@@ -241,8 +247,8 @@ class LLMProvider(Provider):
             model=model,
             temperature=temperature,
             max_tokens=max_tokens,
-            tools=None,
-            tool_choice=None,
+            tools=tools,
+            tool_choice=tool_choice,
             schema=None,
             stream=True,
             options=kwargs,
@@ -250,7 +256,8 @@ class LLMProvider(Provider):
         async for chunk in llm_response:
             if chunk:
                 yield StreamChunk(delta=chunk)
-        yield StreamChunk(done=True, usage=await self._usage(llm_response, model_id))
+        final = await self._response(llm_response, model_id)
+        yield StreamChunk(done=True, usage=final.usage, response=final)
 
     async def complete_structured(
         self,

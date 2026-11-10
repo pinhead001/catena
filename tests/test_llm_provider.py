@@ -312,3 +312,25 @@ async def test_works_inside_a_chain(scripted):
 
     assert result.messages[-1].content == "final"
     assert result.usage.input_tokens == 6
+
+
+@pytest.mark.asyncio
+async def test_stream_carries_tools_and_ends_with_the_complete_response(scripted):
+    model = scripted["catena-fake"]
+    model.script = [
+        {
+            "chunks": ["Let me ", "check."],
+            "tool_calls": [{"name": "add", "arguments": {"a": 2, "b": 40}}],
+        }
+    ]
+    add = Tool(name="add", description="Add.", parameters={"type": "object", "properties": {}})
+
+    provider = providers.llm("catena-fake")
+    chunks = [c async for c in provider.stream([Message.user("2 + 40?")], tools=[add])]
+
+    assert [c.delta for c in chunks[:-1]] == ["Let me ", "check."]
+    final = chunks[-1].response
+    assert final.content == "Let me check."
+    assert [(c.name, c.arguments) for c in final.tool_calls] == [("add", {"a": 2, "b": 40})]
+    assert final.usage == chunks[-1].usage
+    assert [t.name for t in model.prompts[0].tools] == ["add"]

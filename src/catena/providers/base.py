@@ -62,12 +62,15 @@ class Provider(ABC):
         model: str | None = None,
         temperature: float | None = None,
         max_tokens: int | None = None,
+        tools: list[Tool] | None = None,
+        tool_choice: str | None = None,
         **kwargs: Any,
     ) -> AsyncIterator[StreamChunk]:
         """Stream a completion from the given messages.
 
-        Yields `StreamChunk`s as text arrives, with a final chunk carrying
-        `done=True` and the total `usage`.
+        Yields `StreamChunk`s as text arrives, then a final chunk with
+        `done=True`, the total `usage`, and the complete `response`
+        (including any tool calls the model made).
         """
         ...
 
