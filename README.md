@@ -26,7 +26,7 @@ print(f"Cost: ${result.usage.cost_usd:.4f}")
 ## Features
 
 - **Simple API** - Decorator-based chains, no complex abstractions
-- **Multi-provider** - OpenAI, Anthropic, or bring your own
+- **Multi-provider** - OpenAI and Anthropic built in, plus every model the [`llm`](https://llm.datasette.io) library supports
 - **Cost tracking** - Know exactly what you're spending
 - **Caching** - Stop paying for repeated calls
 - **Retries** - Built-in exponential backoff
@@ -43,6 +43,7 @@ pip install catena-ai
 pip install catena-ai[openai]
 pip install catena-ai[anthropic]
 pip install catena-ai[structured]  # Pydantic, for structured output
+pip install catena-ai[llm]         # any model with an `llm` plugin
 pip install catena-ai[all]
 ```
 
@@ -220,6 +221,24 @@ async for chunk in provider.stream([Message.user("Write a haiku")]):
         print(chunk.delta, end="", flush=True)
 ```
 
+### Any Model, via `llm`
+
+[`llm`](https://llm.datasette.io) reaches dozens of hosted and local models through plugins. `providers.llm()` puts all of them behind Catena's chains, retries, cost tracking and caching. Requires `pip install catena-ai[llm]`.
+
+```python
+# One-time setup, on the command line:
+#   llm keys set openai          (or: llm install llm-ollama, llm-gemini, ...)
+
+provider = providers.llm("gpt-4o-mini")   # any id from `llm models`
+provider = providers.llm()                # your `llm models default`
+
+response = await provider.complete([Message.user("Hello!")])
+```
+
+It supports everything the built-in providers do: tool calling, streaming and `complete_structured` (which uses the model's own schema support where its plugin has it). Model options go in as keyword arguments, e.g. `provider.complete(messages, seed=7)`. Keys are read from `llm`'s own key store.
+
+Cost is reported for models in Catena's price table (matched by name) and is `0` for others, such as local models.
+
 ## Why Catena?
 
 | Feature | Catena | LangChain | Raw API |
@@ -290,6 +309,12 @@ anthropic = providers.anthropic(
 )
 # Current Claude models reject `temperature`, so the Anthropic provider only
 # sends it when you pass one explicitly.
+
+# Any model with an `llm` plugin (keys and default model come from llm's config)
+llm = providers.llm(
+    model: str = None,    # Defaults to `llm models default`
+    key: str = None,      # Defaults to llm's key store
+)
 
 # All providers implement:
 await provider.complete(

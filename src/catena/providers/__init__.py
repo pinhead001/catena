@@ -5,13 +5,14 @@ from typing import Any
 
 from catena.providers.base import Provider
 
-__all__ = ["Provider", "OpenAIProvider", "AnthropicProvider"]
+__all__ = ["Provider", "OpenAIProvider", "AnthropicProvider", "LLMProvider"]
 
 # The implementation modules are private (_openai, not openai): a submodule named
 # like a factory below would replace that factory on this package once imported.
 _PROVIDER_MODULES = {
     "OpenAIProvider": "_openai",
     "AnthropicProvider": "_anthropic",
+    "LLMProvider": "_llm",
 }
 
 
@@ -36,3 +37,9 @@ def anthropic(**kwargs: Any) -> Provider:
 
     return AnthropicProvider(**kwargs)
 
+
+def llm(model: str | None = None, **kwargs: Any) -> Provider:
+    """Create a provider for any model the `llm` library can reach."""
+    from catena.providers._llm import LLMProvider
+
+    return LLMProvider(model, **kwargs)
