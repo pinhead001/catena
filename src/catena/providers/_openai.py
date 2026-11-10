@@ -25,8 +25,19 @@ def _parse_tool_call(id: str, name: str, raw_arguments: str | None) -> ToolCall:
     return ToolCall(id=id, name=name, arguments=arguments)
 
 
-def _to_openai_messages(messages: list[Message]) -> list[dict[str, Any]]:
-    """Convert to Chat Completions messages, including tool calls and tool results."""
+def _to_openai_messages(
+    messages: list[Message], system: str | None = None
+) -> list[dict[str, Any]]:
+    """Convert to Chat Completions messages, including tool calls and tool results.
+
+    `system` becomes a system message placed after any that open the conversation.
+    """
+    if system:
+        leading = 0
+        while leading < len(messages) and messages[leading].role in (Role.SYSTEM, "system"):
+            leading += 1
+        messages = [*messages[:leading], Message.system(system), *messages[leading:]]
+
     converted: list[dict[str, Any]] = []
     for msg in messages:
         role = msg.role.value if isinstance(msg.role, Role) else msg.role
@@ -60,11 +71,15 @@ def _to_openai_messages(messages: list[Message]) -> list[dict[str, Any]]:
 def _request_kwargs(
     model: str,
     messages: list[Message],
+    system: str | None,
     temperature: float | None,
     max_tokens: int | None,
 ) -> dict[str, Any]:
     """Build the arguments shared by complete() and stream()."""
-    request: dict[str, Any] = {"model": model, "messages": _to_openai_messages(messages)}
+    request: dict[str, Any] = {
+        "model": model,
+        "messages": _to_openai_messages(messages, system),
+    }
     # Sent only when given: reasoning models reject a non-default temperature.
     if temperature is not None:
         request["temperature"] = temperature
@@ -122,6 +137,7 @@ class OpenAIProvider(Provider):
         model: str | None = None,
         temperature: float | None = None,
         max_tokens: int | None = None,
+        system: str | None = None,
         tools: list[Tool] | None = None,
         tool_choice: str | None = None,
         **kwargs: Any,
@@ -134,7 +150,7 @@ class OpenAIProvider(Provider):
         model_name = model or self.default_model
 
         response = await self._client.chat.completions.create(
-            **_request_kwargs(model_name, messages, temperature, max_tokens),
+            **_request_kwargs(model_name, messages, system, temperature, max_tokens),
             **_tool_kwargs(tools, tool_choice),
             **kwargs,
         )
@@ -171,6 +187,7 @@ class OpenAIProvider(Provider):
         model: str | None = None,
         temperature: float | None = None,
         max_tokens: int | None = None,
+        system: str | None = None,
         tools: list[Tool] | None = None,
         tool_choice: str | None = None,
         **kwargs: Any,
@@ -179,7 +196,7 @@ class OpenAIProvider(Provider):
         model_name = model or self.default_model
 
         response = await self._client.chat.completions.create(
-            **_request_kwargs(model_name, messages, temperature, max_tokens),
+            **_request_kwargs(model_name, messages, system, temperature, max_tokens),
             **_tool_kwargs(tools, tool_choice),
             stream=True,
             stream_options={"include_usage": True},

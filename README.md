@@ -417,6 +417,7 @@ await provider.complete(
     model: str = None,
     temperature: float = None,  # sent only when given; some models reject it
     max_tokens: int = None,
+    system: str = None,         # system prompt, on top of any system messages
     tools: list[Tool] = None,
     tool_choice: str = None,  # "auto", "none", "required", or one tool's name
 ) -> Response

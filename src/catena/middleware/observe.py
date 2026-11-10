@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import time
 from abc import ABC, abstractmethod
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -50,6 +51,15 @@ class ChainTrace:
         return all(s.success for s in self.steps)
 
 
+@dataclass
+class _RunState:
+    """What a TraceCollector knows about one chain run in progress."""
+
+    trace: ChainTrace | None = None
+    step_start: float = 0.0
+    seen: Usage = field(default_factory=Usage)  # usage already attributed to earlier steps
+
+
 class Observer(ABC):
     """Receives the events of a chain run. Attach one with `chain.observe(observer)`."""
 
@@ -83,9 +93,8 @@ class TraceCollector(Observer):
     """Collects a trace of each chain run for later analysis or export.
 
     Each step's usage is what that step added, and a trace's total is what
-    the run added, even when the run continues an earlier context. An observer
-    follows one run at a time: give concurrent runs (`map_parallel`) their own
-    chain and observer if you need per-run traces.
+    the run added, even when the run continues an earlier context. Runs that
+    overlap (`map_parallel`) each get their own trace.
 
     Example:
         ```python
@@ -97,54 +106,61 @@ class TraceCollector(Observer):
 
     def __init__(self) -> None:
         self.traces: list[ChainTrace] = []
-        self._current: ChainTrace | None = None
-        self._step_start: float = 0
-        self._seen = Usage()  # usage already attributed to earlier steps or runs
+        # Each chain run is its own asyncio task when runs overlap, so keeping
+        # the run in progress in a context variable keeps their traces apart.
+        self._run: ContextVar[_RunState] = ContextVar("catena_run")
+        self._no_run = _RunState()  # for events that arrive outside a chain run
 
-    def _step_usage(self, ctx: Context) -> Usage:
-        added = ctx.usage - self._seen
-        self._seen = ctx.usage
-        return added
+    def _state(self) -> _RunState:
+        return self._run.get(self._no_run)
 
     def on_chain_start(self, chain_name: str, ctx: Context | None = None) -> None:
-        self._current = ChainTrace(chain_name=chain_name, started_at=time.time())
-        self._seen = ctx.usage if ctx is not None else Usage()
+        self._run.set(
+            _RunState(
+                trace=ChainTrace(chain_name=chain_name, started_at=time.time()),
+                seen=ctx.usage if ctx is not None else Usage(),
+            )
+        )
 
     def on_step_start(self, step_name: str) -> None:
-        self._step_start = time.time()
+        self._state().step_start = time.time()
 
     def on_step_end(self, step_name: str, ctx: Context, duration: float) -> None:
+        state = self._state()
         now = time.time()
         trace = StepTrace(
             name=step_name,
             started_at=now - duration,
             ended_at=now,
-            usage=self._step_usage(ctx),
+            usage=ctx.usage - state.seen,
         )
-        if self._current:
-            self._current.steps.append(trace)
-            self._current.total_usage = self._current.total_usage + trace.usage
+        state.seen = ctx.usage
+        if state.trace:
+            state.trace.steps.append(trace)
+            state.trace.total_usage = state.trace.total_usage + trace.usage
         self._report_step(trace)
 
     def on_step_error(self, step_name: str, error: Exception) -> None:
+        state = self._state()
         now = time.time()
         trace = StepTrace(
             name=step_name,
-            started_at=self._step_start or now,
+            started_at=state.step_start or now,
             ended_at=now,
             success=False,
             error=str(error),
         )
-        if self._current:
-            self._current.steps.append(trace)
+        if state.trace:
+            state.trace.steps.append(trace)
         self._report_step(trace)
 
     def on_chain_end(self, ctx: Context) -> None:
-        if self._current:
-            self._current.ended_at = time.time()
-            self.traces.append(self._current)
-            self._report_chain(self._current)
-            self._current = None
+        state = self._state()
+        if state.trace:
+            state.trace.ended_at = time.time()
+            self.traces.append(state.trace)
+            self._report_chain(state.trace)
+            self._run.set(self._no_run)
 
     def _report_step(self, trace: StepTrace) -> None:
         """Hook for subclasses: a step finished or failed."""

@@ -334,3 +334,18 @@ async def test_stream_carries_tools_and_ends_with_the_complete_response(scripted
     assert [(c.name, c.arguments) for c in final.tool_calls] == [("add", {"a": 2, "b": 40})]
     assert final.usage == chunks[-1].usage
     assert [t.name for t in model.prompts[0].tools] == ["add"]
+
+
+@pytest.mark.asyncio
+async def test_system_argument_joins_system_messages(scripted):
+    model = scripted["catena-fake"]
+    model.script = [{"chunks": ["ok"]}, {"chunks": ["ok"]}]
+    provider = providers.llm("catena-fake")
+
+    await provider.complete(
+        [Message.system("Be terse."), Message.user("hi")], system="Answer in French."
+    )
+    [_ async for _ in provider.stream([Message.user("hi")], system="Be terse.")]
+
+    assert model.prompts[0].system == "Be terse.\n\nAnswer in French."
+    assert model.prompts[1].system == "Be terse."

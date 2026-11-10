@@ -609,3 +609,28 @@ async def test_anthropic_stream_ends_with_tool_calls_and_skips_thinking(monkeypa
     assert stream_kwargs["tools"][0]["name"] == "get_weather"
     assert stream_kwargs["tool_choice"] == {"type": "auto"}
     assert "get_weather tool" in stream_kwargs["system"]
+
+
+@pytest.mark.asyncio
+async def test_openai_system_argument_follows_leading_system_messages(monkeypatch):
+    create = _fake_openai_create(monkeypatch)
+
+    await OpenAIProvider(api_key="test").complete(
+        [Message.system("Be terse."), Message.user("hi")], system="Answer in French."
+    )
+
+    assert create.call_args.kwargs["messages"] == [
+        {"role": "system", "content": "Be terse."},
+        {"role": "system", "content": "Answer in French."},
+        {"role": "user", "content": "hi"},
+    ]
+    assert "system" not in create.call_args.kwargs
+
+
+@pytest.mark.asyncio
+async def test_openai_system_argument_alone_opens_the_conversation(monkeypatch):
+    create = _fake_openai_create(monkeypatch)
+
+    await OpenAIProvider(api_key="test").complete([Message.user("hi")], system="Be terse.")
+
+    assert create.call_args.kwargs["messages"][0] == {"role": "system", "content": "Be terse."}

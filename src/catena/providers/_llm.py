@@ -135,6 +135,7 @@ class LLMProvider(Provider):
         model: str | None,
         temperature: float | None,
         max_tokens: int | None,
+        system: str | None,
         tools: list[Tool] | None,
         tool_choice: str | None,
         schema: type[BaseModel] | dict[str, Any] | None,
@@ -154,7 +155,8 @@ class LLMProvider(Provider):
             options[name] = max_tokens
 
         # llm has no tool_choice setting, so it goes in the system prompt.
-        kwargs = self._turn_kwargs(messages, tool_choice_instruction(tool_choice))
+        extra_system = [text for text in (system, tool_choice_instruction(tool_choice)) if text]
+        kwargs = self._turn_kwargs(messages, "\n\n".join(extra_system) or None)
         kwargs["stream"] = stream
 
         if tools:
@@ -189,6 +191,7 @@ class LLMProvider(Provider):
         model: str | None = None,
         temperature: float | None = None,
         max_tokens: int | None = None,
+        system: str | None = None,
         tools: list[Tool] | None = None,
         tool_choice: str | None = None,
         schema: type[BaseModel] | dict[str, Any] | None = None,
@@ -205,6 +208,7 @@ class LLMProvider(Provider):
             model=model,
             temperature=temperature,
             max_tokens=max_tokens,
+            system=system,
             tools=tools,
             tool_choice=tool_choice,
             schema=schema,
@@ -238,6 +242,7 @@ class LLMProvider(Provider):
         model: str | None = None,
         temperature: float | None = None,
         max_tokens: int | None = None,
+        system: str | None = None,
         tools: list[Tool] | None = None,
         tool_choice: str | None = None,
         **kwargs: Any,
@@ -248,6 +253,7 @@ class LLMProvider(Provider):
             model=model,
             temperature=temperature,
             max_tokens=max_tokens,
+            system=system,
             tools=tools,
             tool_choice=tool_choice,
             schema=None,

@@ -50,6 +50,7 @@
   time in one process.
 - Sending tool results back to OpenAI or Anthropic produced requests the APIs
   reject; tool round trips now use each API's own format.
+- `system=` only worked on the Anthropic provider; it now works on all three.
 - The cache returned the same answer for requests that differed only in system
   prompt, schema or provider options, and ignored a per-call `ttl`.
 - `MemoryCache` evicted the oldest entry rather than the least recently used.

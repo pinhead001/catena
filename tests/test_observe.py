@@ -121,3 +121,38 @@ async def test_composed_chain_keeps_observers():
 
     (trace,) = traces.traces
     assert len(trace.steps) == 2
+
+
+@pytest.mark.asyncio
+async def test_overlapping_runs_get_separate_traces():
+    import asyncio
+
+    from catena.parallel import map_parallel
+
+    chain = Chain(name="batch")
+    traces = chain.observe(TraceCollector())
+
+    @chain.step(retries=0)
+    async def first(ctx: Context) -> Context:
+        await asyncio.sleep(0.01 if ctx.text == "slow" else 0)
+        ctx.add_usage(Usage(input_tokens=len(ctx.text), cost_usd=0.01))
+        return ctx
+
+    @chain.step(retries=0)
+    async def second(ctx: Context) -> Context:
+        await asyncio.sleep(0)
+        if ctx.text == "bad":
+            raise RuntimeError("boom")
+        ctx.add_usage(Usage(output_tokens=1, cost_usd=0.02))
+        return ctx
+
+    await map_parallel(chain, ["slow", "ok", "bad", "fine"], return_exceptions=True)
+
+    assert len(traces.traces) == 4
+    for trace in traces.traces:
+        assert [s.name for s in trace.steps] == ["first", "second"]
+    failed = [t for t in traces.traces if not t.success]
+    assert len(failed) == 1 and failed[0].total_usage.cost_usd == pytest.approx(0.01)
+    completed = [t for t in traces.traces if t.success]
+    assert all(t.total_usage.cost_usd == pytest.approx(0.03) for t in completed)
+    assert sorted(t.total_usage.input_tokens for t in completed) == [2, 4, 4]

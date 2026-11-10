@@ -34,6 +34,7 @@ class Provider(ABC):
         model: str | None = None,
         temperature: float | None = None,
         max_tokens: int | None = None,
+        system: str | None = None,
         tools: list[Tool] | None = None,
         tool_choice: str | None = None,
         **kwargs: Any,
@@ -43,6 +44,7 @@ class Provider(ABC):
         Args:
             messages: Conversation history
             model: Model to use (provider-specific)
+            system: System prompt, added after any system messages in `messages`
             temperature: Sampling temperature; the model's default when omitted
             max_tokens: Maximum tokens to generate
             tools: Tools the model may call
@@ -62,6 +64,7 @@ class Provider(ABC):
         model: str | None = None,
         temperature: float | None = None,
         max_tokens: int | None = None,
+        system: str | None = None,
         tools: list[Tool] | None = None,
         tool_choice: str | None = None,
         **kwargs: Any,
