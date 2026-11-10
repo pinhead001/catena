@@ -207,7 +207,17 @@ result.output.due_date    # datetime.date
 result.usage.cost_usd     # total across all attempts
 ```
 
-Raises `StructuredOutputError` if the model can't produce valid output within the retry budget.
+Raises `StructuredOutputError` if the model can't produce valid output within the retry budget; its `usage` attribute holds what the failed attempts cost.
+
+For output that isn't an object, such as a bare list, use a Pydantic `RootModel`:
+
+```python
+class Tags(RootModel[list[str]]):
+    pass
+
+result = await provider.complete_structured(messages, schema=Tags)
+result.output.root        # list[str]
+```
 
 ### Streaming
 
@@ -307,8 +317,6 @@ anthropic = providers.anthropic(
     api_key: str = None,  # Defaults to ANTHROPIC_API_KEY
     model: str = "claude-opus-5-5",
 )
-# Current Claude models reject `temperature`, so the Anthropic provider only
-# sends it when you pass one explicitly.
 
 # Any model with an `llm` plugin (keys and default model come from llm's config)
 llm = providers.llm(
@@ -320,17 +328,17 @@ llm = providers.llm(
 await provider.complete(
     messages: list[Message],
     model: str = None,
-    temperature: float = 0.7,
+    temperature: float = None,  # sent only when given; some models reject it
     max_tokens: int = None,
     tools: list[Tool] = None,
-    tool_choice: str = None,  # name of a tool the model should call
+    tool_choice: str = None,  # "auto", "none", "required", or one tool's name
 ) -> Response
 
 # Streaming (yields StreamChunk; the last chunk has done=True and `usage`)
 async for chunk in provider.stream(
     messages: list[Message],
     model: str = None,
-    temperature: float = 0.7,
+    temperature: float = None,
     max_tokens: int = None,
 ):
     ...

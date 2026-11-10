@@ -5,9 +5,10 @@ from datetime import date
 from typing import Any, Generic, TypeVar
 
 import pytest
-from pydantic import BaseModel
+from pydantic import BaseModel, RootModel
 
 from catena import Message, Provider, Response, StructuredOutputError, ToolCall, Usage
+from catena.models import Role
 from catena.structured import schema_tool
 
 ItemT = TypeVar("ItemT")
@@ -180,3 +181,85 @@ async def test_complete_structured_rejects_tools_kwargs(kwarg):
 
     with pytest.raises(TypeError, match="sets tools and tool_choice"):
         await provider.complete_structured([Message.user("x")], schema=Invoice, **{kwarg: None})
+
+
+@pytest.mark.asyncio
+async def test_retry_replays_the_tool_call_and_answers_it_with_the_error():
+    provider = ScriptedProvider(
+        [
+            _tool_response({"company": "Acme"}),
+            _tool_response({"company": "Acme", "amount": 1, "due_date": "2026-10-01"}),
+        ]
+    )
+
+    await provider.complete_structured([Message.user("extract")], schema=Invoice)
+
+    _, assistant, result = provider.calls[1]["messages"]
+    assert assistant.role == Role.ASSISTANT
+    assert assistant.tool_calls[0].arguments == {"company": "Acme"}
+    assert result.role == Role.TOOL
+    assert result.tool_call_id == assistant.tool_calls[0].id
+    assert "amount" in result.content
+
+
+@pytest.mark.asyncio
+async def test_retry_answers_every_tool_call_the_model_made():
+    two_calls = Response(
+        content="",
+        tool_calls=[
+            ToolCall(id="c1", name="Invoice", arguments={"company": "Acme"}),
+            ToolCall(id="c2", name="Invoice", arguments={"company": "Other"}),
+        ],
+    )
+    provider = ScriptedProvider(
+        [two_calls, _tool_response({"company": "Acme", "amount": 1, "due_date": "2026-10-01"})]
+    )
+
+    await provider.complete_structured([Message.user("extract")], schema=Invoice)
+
+    results = [m for m in provider.calls[1]["messages"] if m.role == Role.TOOL]
+    assert [m.tool_call_id for m in results] == ["c1", "c2"]
+    assert "failed validation" in results[0].content
+    assert results[1].content.startswith("Not used.")
+
+
+class LineItem(BaseModel):
+    name: str
+    quantity: int
+
+
+class LineItems(RootModel[list[LineItem]]):
+    pass
+
+
+def test_root_model_schema_is_wrapped_in_an_object():
+    parameters = schema_tool(LineItems).parameters
+
+    assert parameters["type"] == "object"
+    assert parameters["required"] == ["value"]
+    assert parameters["properties"]["value"]["type"] == "array"
+    # $ref paths are relative to the root, so the definitions must stay there.
+    assert parameters["properties"]["value"]["items"] == {"$ref": "#/$defs/LineItem"}
+    assert "LineItem" in parameters["$defs"]
+
+
+@pytest.mark.asyncio
+async def test_complete_structured_returns_a_root_model():
+    provider = ScriptedProvider(
+        [
+            Response(
+                content="",
+                tool_calls=[
+                    ToolCall(
+                        id="c1",
+                        name="LineItems",
+                        arguments={"value": [{"name": "Widget", "quantity": 3}]},
+                    )
+                ],
+            )
+        ]
+    )
+
+    result = await provider.complete_structured([Message.user("extract")], schema=LineItems)
+
+    assert result.output.root == [LineItem(name="Widget", quantity=3)]

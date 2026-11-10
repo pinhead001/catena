@@ -3,7 +3,7 @@
 from typing import Any
 
 import pytest
-from pydantic import BaseModel
+from pydantic import BaseModel, RootModel
 
 from catena import Chain, Context, Message, StructuredOutputError, Tool, ToolCall, providers
 
@@ -233,6 +233,26 @@ async def test_structured_uses_native_schema_and_retries(scripted):
     retry = _roles_and_text(model.prompts[1])
     assert retry[1] == ("assistant", '{"company": "Acme"}')
     assert "failed validation" in retry[2][1]
+
+
+@pytest.mark.asyncio
+async def test_structured_returns_a_root_model(scripted):
+    class Tags(RootModel[list[str]]):
+        pass
+
+    model = scripted["catena-fake"]
+    model.script = [{"chunks": ['{"value": ["a", "b"]}']}]
+
+    result = await providers.llm("catena-fake").complete_structured(
+        [Message.user("tag this")], schema=Tags
+    )
+
+    assert result.output.root == ["a", "b"]
+    assert model.prompts[0].schema["properties"]["value"] == {
+        "items": {"type": "string"},
+        "title": "Tags",
+        "type": "array",
+    }
 
 
 @pytest.mark.asyncio

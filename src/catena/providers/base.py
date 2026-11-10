@@ -12,6 +12,7 @@ from catena.structured import (
     StructuredOutputError,
     StructuredResponse,
     T,
+    parse_output,
     schema_tool,
 )
 from catena.tools import Tool
@@ -75,7 +76,7 @@ class Provider(ABC):
     ) -> StructuredResponse[T]:
         """Generate output validated against a Pydantic model.
 
-        The model is forced to call a tool whose parameters are `schema`'s JSON
+        The model is asked to call a tool whose parameters are `schema`'s JSON
         schema. Invalid output is sent back to the model with the validation
         error, up to `retries` more times.
 
@@ -114,24 +115,28 @@ class Provider(ABC):
             if call is None:
                 raw = response.content
                 error = f"You did not call the {tool.name} tool."
-                feedback = f"{error} Your reply was:\n{raw}"
             elif call.error:
                 raw = error = call.error
-                feedback = error
             else:
                 raw = json.dumps(call.arguments)
                 try:
-                    output = schema.model_validate(call.arguments)
+                    output = parse_output(schema, call.arguments)
                     return StructuredResponse(output=output, usage=usage, attempts=attempt)
                 except ValidationError as e:
-                    error = str(e)
-                feedback = f"Your previous output was:\n{raw}\n\nIt failed validation:\n{error}"
+                    error = f"The arguments failed validation:\n{e}"
 
-            history.append(
-                Message.user(
-                    f"{feedback}\n\nCall the {tool.name} tool again with corrected arguments."
-                )
-            )
+            # Hand the failure back the way the model expects: its own turn,
+            # then a result for every tool call it made.
+            retry = f"Call the {tool.name} tool again with corrected arguments."
+            if response.tool_calls:
+                history.append(response.message)
+                for made in response.tool_calls:
+                    feedback = error if made is call or call is None else "Not used."
+                    history.append(Message.tool(f"{feedback}\n\n{retry}", tool_call_id=made.id))
+            else:
+                if raw:
+                    history.append(Message.assistant(raw))
+                history.append(Message.user(f"{error} {retry}"))
 
         raise StructuredOutputError(
             f"No valid {schema.__name__} after {retries + 1} attempts: {error}",

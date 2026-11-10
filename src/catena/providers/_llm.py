@@ -2,13 +2,20 @@
 
 from __future__ import annotations
 
+import json
 import uuid
 from collections.abc import AsyncIterator
 from typing import TYPE_CHECKING, Any
 
 from catena.models import Message, Response, Role, StreamChunk, ToolCall, Usage, calculate_cost
 from catena.providers.base import Provider
-from catena.structured import StructuredOutputError, StructuredResponse, T
+from catena.structured import (
+    StructuredOutputError,
+    StructuredResponse,
+    T,
+    output_schema,
+    parse_output,
+)
 from catena.tools import Tool, tool_choice_instruction
 
 if TYPE_CHECKING:
@@ -272,14 +279,15 @@ class LLMProvider(Provider):
         error = ""
         raw = ""
 
+        json_schema = output_schema(schema)
         for attempt in range(1, retries + 2):
-            response = await self.complete(history, schema=schema, **kwargs)
+            response = await self.complete(history, schema=json_schema, **kwargs)
             usage = usage + response.usage
             raw = response.content
             try:
-                output = schema.model_validate_json(raw)
+                output = parse_output(schema, json.loads(raw))
                 return StructuredResponse(output=output, usage=usage, attempts=attempt)
-            except ValidationError as e:
+            except (json.JSONDecodeError, ValidationError) as e:
                 error = str(e)
 
             history.append(Message.assistant(raw))

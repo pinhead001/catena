@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Generic, TypeVar
+from typing import TYPE_CHECKING, Any, Generic, TypeVar
 
 from catena.models import Usage
 from catena.tools import Tool
@@ -45,11 +45,38 @@ def tool_name_for(schema: type[BaseModel]) -> str:
     return name or "output"
 
 
+def output_schema(schema: type[BaseModel]) -> dict[str, Any]:
+    """The JSON schema to ask the model for.
+
+    Tool parameters must be a JSON object, so a RootModel (a bare list, string,
+    union, ...) is asked for as `{"value": ...}`; `parse_output` unwraps it.
+    """
+    from pydantic import RootModel
+
+    json_schema = schema.model_json_schema()
+    if not issubclass(schema, RootModel):
+        return json_schema
+    wrapped: dict[str, Any] = {"type": "object", "required": ["value"]}
+    if "$defs" in json_schema:
+        wrapped["$defs"] = json_schema.pop("$defs")  # $ref paths point at the root
+    wrapped["properties"] = {"value": json_schema}
+    return wrapped
+
+
+def parse_output(schema: type[T], data: Any) -> T:
+    """Validate data shaped by `output_schema(schema)` into `schema`."""
+    from pydantic import RootModel
+
+    if issubclass(schema, RootModel):
+        data = data.get("value") if isinstance(data, dict) else None
+    return schema.model_validate(data)
+
+
 def schema_tool(schema: type[BaseModel]) -> Tool:
     """Build the tool the model is forced to call to return `schema`-shaped data."""
     description = schema.__doc__ or f"Return the result as a {schema.__name__}."
     return Tool(
         name=tool_name_for(schema),
         description=description.strip(),
-        parameters=schema.model_json_schema(),
+        parameters=output_schema(schema),
     )
