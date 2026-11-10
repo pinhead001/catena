@@ -82,6 +82,17 @@ class Usage:
             cost_usd=self.cost_usd + other.cost_usd,
         )
 
+    def __sub__(self, other: Usage) -> Usage:
+        return Usage(
+            input_tokens=self.input_tokens - other.input_tokens,
+            output_tokens=self.output_tokens - other.output_tokens,
+            cost_usd=self.cost_usd - other.cost_usd,
+        )
+
+    @property
+    def total_tokens(self) -> int:
+        return self.input_tokens + self.output_tokens
+
 
 @dataclass
 class Response:

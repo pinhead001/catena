@@ -7,12 +7,16 @@ import functools
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import Any, TypeVar, overload
+from typing import TYPE_CHECKING, Any, TypeVar, overload
 
 from catena.context import Context
 from catena.models import Message
 
+if TYPE_CHECKING:
+    from catena.middleware.observe import Observer
+
 T = TypeVar("T")
+ObserverT = TypeVar("ObserverT", bound="Observer")
 
 # Step function types
 StepFunc = Callable[[Context], Awaitable[Context]]
@@ -96,6 +100,7 @@ class Chain:
             "after_step": [],
             "on_error": [],
         }
+        self._observers: list[Observer] = []
 
     def step(
         self,
@@ -151,6 +156,19 @@ class Chain:
 
         return decorator
 
+    def observe(self, observer: ObserverT) -> ObserverT:
+        """Report every run of this chain to an observer; returns the observer.
+
+        Example:
+            ```python
+            traces = chain.observe(TraceCollector())
+            await chain.run("Hello")
+            print(traces.to_dict())
+            ```
+        """
+        self._observers.append(observer)
+        return observer
+
     async def _emit(self, event: str, *args: Any, **kwargs: Any) -> None:
         """Emit an event to all registered hooks."""
         for hook in self._hooks.get(event, []):
@@ -183,29 +201,50 @@ class Chain:
         elif input is not None:
             ctx.messages.extend(input)
 
-        # Execute steps
-        for step in self.steps:
-            await self._emit("before_step", step.config.name, ctx)
-            start = time.perf_counter()
-
-            try:
-                ctx = await step.execute(ctx)
-                elapsed = time.perf_counter() - start
-                await self._emit("after_step", step.config.name, ctx, elapsed)
-            except Exception as e:
-                await self._emit("on_error", step.config.name, e, ctx)
-                raise
+        for observer in self._observers:
+            observer.on_chain_start(self.name, ctx)
+        try:
+            for step in self.steps:
+                ctx = await self._run_step(step, ctx)
+        finally:
+            # Also after a failure, with the context as the last good step left it.
+            for observer in self._observers:
+                observer.on_chain_end(ctx)
 
         return ctx
 
-    def __rshift__(self, other: Chain) -> Chain:
-        """Compose chains with >>: the steps of both, and the hooks of both.
+    async def _run_step(self, step: Step, ctx: Context) -> Context:
+        name = step.config.name
+        await self._emit("before_step", name, ctx)
+        for observer in self._observers:
+            observer.on_step_start(name)
+        start = time.perf_counter()
 
-        Hooks apply to every step of the composed chain; one registered on
-        both chains is kept once.
+        try:
+            result = await step.execute(ctx)
+        except Exception as e:
+            await self._emit("on_error", name, e, ctx)
+            for observer in self._observers:
+                observer.on_step_error(name, e)
+            raise
+
+        elapsed = time.perf_counter() - start
+        await self._emit("after_step", name, result, elapsed)
+        for observer in self._observers:
+            observer.on_step_end(name, result, elapsed)
+        return result
+
+    def __rshift__(self, other: Chain) -> Chain:
+        """Compose chains with >>: the steps, hooks and observers of both.
+
+        Hooks and observers apply to every step of the composed chain; one
+        registered on both chains is kept once.
         """
         composed = Chain(name=f"{self.name}>>{other.name}")
         composed.steps = self.steps + other.steps
+        for observer in self._observers + other._observers:
+            if not any(observer is kept for kept in composed._observers):
+                composed._observers.append(observer)
         for event, hooks in composed._hooks.items():
             for hook in self._hooks[event] + other._hooks[event]:
                 if not any(hook is kept for kept in hooks):

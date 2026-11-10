@@ -51,11 +51,11 @@ class ChainTrace:
 
 
 class Observer(ABC):
-    """Abstract observer for chain execution."""
+    """Receives the events of a chain run. Attach one with `chain.observe(observer)`."""
 
     @abstractmethod
-    def on_chain_start(self, chain_name: str) -> None:
-        """Called when a chain starts executing."""
+    def on_chain_start(self, chain_name: str, ctx: Context | None = None) -> None:
+        """Called when a chain starts executing, with its starting context."""
         ...
 
     @abstractmethod
@@ -70,137 +70,87 @@ class Observer(ABC):
 
     @abstractmethod
     def on_step_error(self, step_name: str, error: Exception) -> None:
-        """Called when a step fails."""
+        """Called when a step fails after its retries."""
         ...
 
     @abstractmethod
     def on_chain_end(self, ctx: Context) -> None:
-        """Called when a chain completes."""
+        """Called when a chain finishes, whether it completed or a step failed."""
         ...
 
 
-class ConsoleObserver(Observer):
-    """Simple console logger for chain execution.
+class TraceCollector(Observer):
+    """Collects a trace of each chain run for later analysis or export.
+
+    Each step's usage is what that step added, and a trace's total is what
+    the run added, even when the run continues an earlier context. An observer
+    follows one run at a time: give concurrent runs (`map_parallel`) their own
+    chain and observer if you need per-run traces.
 
     Example:
         ```python
-        from catena import Chain
-        from catena.middleware import ConsoleObserver
-
-        chain = Chain()
-        observer = ConsoleObserver(verbose=True)
-
-        @chain.on("before_step")
-        def log_start(name, ctx):
-            observer.on_step_start(name)
-
-        @chain.on("after_step")
-        def log_end(name, ctx, duration):
-            observer.on_step_end(name, ctx, duration)
+        traces = chain.observe(TraceCollector())
+        await chain.run("Hello")
+        print(traces.to_dict())
         ```
     """
-
-    def __init__(self, verbose: bool = False, prefix: str = "[catena]") -> None:
-        self.verbose = verbose
-        self.prefix = prefix
-        self._current_trace: ChainTrace | None = None
-
-    def on_chain_start(self, chain_name: str) -> None:
-        self._current_trace = ChainTrace(chain_name=chain_name, started_at=time.time())
-        print(f"{self.prefix} Starting chain: {chain_name}")
-
-    def on_step_start(self, step_name: str) -> None:
-        if self.verbose:
-            print(f"{self.prefix}   -> {step_name}")
-
-    def on_step_end(self, step_name: str, ctx: Context, duration: float) -> None:
-        if self._current_trace:
-            self._current_trace.steps.append(
-                StepTrace(
-                    name=step_name,
-                    started_at=time.time() - duration,
-                    ended_at=time.time(),
-                    usage=ctx.usage,
-                )
-            )
-
-        if self.verbose:
-            cost = ctx.usage.cost_usd
-            tokens = ctx.usage.input_tokens + ctx.usage.output_tokens
-            print(
-                f"{self.prefix}   <- {step_name} "
-                f"({duration * 1000:.0f}ms, {tokens} tokens, ${cost:.4f})"
-            )
-
-    def on_step_error(self, step_name: str, error: Exception) -> None:
-        print(f"{self.prefix}   !! {step_name} failed: {error}")
-        if self._current_trace:
-            self._current_trace.steps.append(
-                StepTrace(
-                    name=step_name,
-                    started_at=time.time(),
-                    ended_at=time.time(),
-                    success=False,
-                    error=str(error),
-                )
-            )
-
-    def on_chain_end(self, ctx: Context) -> None:
-        if self._current_trace:
-            self._current_trace.ended_at = time.time()
-            self._current_trace.total_usage = ctx.usage
-
-        usage = ctx.usage
-        print(
-            f"{self.prefix} Complete: "
-            f"{usage.input_tokens + usage.output_tokens} tokens, "
-            f"${usage.cost_usd:.4f}"
-        )
-
-
-class TraceCollector(Observer):
-    """Collects traces for later analysis or export."""
 
     def __init__(self) -> None:
         self.traces: list[ChainTrace] = []
         self._current: ChainTrace | None = None
         self._step_start: float = 0
+        self._seen = Usage()  # usage already attributed to earlier steps or runs
 
-    def on_chain_start(self, chain_name: str) -> None:
+    def _step_usage(self, ctx: Context) -> Usage:
+        added = ctx.usage - self._seen
+        self._seen = ctx.usage
+        return added
+
+    def on_chain_start(self, chain_name: str, ctx: Context | None = None) -> None:
         self._current = ChainTrace(chain_name=chain_name, started_at=time.time())
+        self._seen = ctx.usage if ctx is not None else Usage()
 
     def on_step_start(self, step_name: str) -> None:
         self._step_start = time.time()
 
     def on_step_end(self, step_name: str, ctx: Context, duration: float) -> None:
+        now = time.time()
+        trace = StepTrace(
+            name=step_name,
+            started_at=now - duration,
+            ended_at=now,
+            usage=self._step_usage(ctx),
+        )
         if self._current:
-            self._current.steps.append(
-                StepTrace(
-                    name=step_name,
-                    started_at=self._step_start,
-                    ended_at=time.time(),
-                    usage=ctx.usage,
-                )
-            )
+            self._current.steps.append(trace)
+            self._current.total_usage = self._current.total_usage + trace.usage
+        self._report_step(trace)
 
     def on_step_error(self, step_name: str, error: Exception) -> None:
+        now = time.time()
+        trace = StepTrace(
+            name=step_name,
+            started_at=self._step_start or now,
+            ended_at=now,
+            success=False,
+            error=str(error),
+        )
         if self._current:
-            self._current.steps.append(
-                StepTrace(
-                    name=step_name,
-                    started_at=self._step_start,
-                    ended_at=time.time(),
-                    success=False,
-                    error=str(error),
-                )
-            )
+            self._current.steps.append(trace)
+        self._report_step(trace)
 
     def on_chain_end(self, ctx: Context) -> None:
         if self._current:
             self._current.ended_at = time.time()
-            self._current.total_usage = ctx.usage
             self.traces.append(self._current)
+            self._report_chain(self._current)
             self._current = None
+
+    def _report_step(self, trace: StepTrace) -> None:
+        """Hook for subclasses: a step finished or failed."""
+
+    def _report_chain(self, trace: ChainTrace) -> None:
+        """Hook for subclasses: the run finished or failed."""
 
     def to_dict(self) -> list[dict[str, Any]]:
         """Export traces as JSON-serializable dicts."""
@@ -209,7 +159,7 @@ class TraceCollector(Observer):
                 "chain": t.chain_name,
                 "duration_ms": t.duration_ms,
                 "success": t.success,
-                "total_tokens": t.total_usage.input_tokens + t.total_usage.output_tokens,
+                "total_tokens": t.total_usage.total_tokens,
                 "total_cost_usd": t.total_usage.cost_usd,
                 "steps": [
                     {
@@ -217,9 +167,58 @@ class TraceCollector(Observer):
                         "duration_ms": s.duration_ms,
                         "success": s.success,
                         "error": s.error,
+                        "tokens": s.usage.total_tokens,
+                        "cost_usd": s.usage.cost_usd,
                     }
                     for s in t.steps
                 ],
             }
             for t in self.traces
         ]
+
+
+class ConsoleObserver(TraceCollector):
+    """Prints each chain run to the console as it happens.
+
+    Example:
+        ```python
+        from catena import Chain
+        from catena.middleware import ConsoleObserver
+
+        chain = Chain(name="my-chain")
+        chain.observe(ConsoleObserver(verbose=True))
+
+        # [catena] Starting chain: my-chain
+        # [catena]   -> step1
+        # [catena]   <- step1 (234ms, 150 tokens, $0.0003)
+        # [catena] Complete: 150 tokens, $0.0003
+        ```
+    """
+
+    def __init__(self, verbose: bool = False, prefix: str = "[catena]") -> None:
+        super().__init__()
+        self.verbose = verbose
+        self.prefix = prefix
+
+    def on_chain_start(self, chain_name: str, ctx: Context | None = None) -> None:
+        super().on_chain_start(chain_name, ctx)
+        print(f"{self.prefix} Starting chain: {chain_name}")
+
+    def on_step_start(self, step_name: str) -> None:
+        super().on_step_start(step_name)
+        if self.verbose:
+            print(f"{self.prefix}   -> {step_name}")
+
+    def _report_step(self, trace: StepTrace) -> None:
+        if not trace.success:
+            print(f"{self.prefix}   !! {trace.name} failed: {trace.error}")
+        elif self.verbose:
+            print(
+                f"{self.prefix}   <- {trace.name} ({trace.duration_ms:.0f}ms, "
+                f"{trace.usage.total_tokens} tokens, ${trace.usage.cost_usd:.4f})"
+            )
+
+    def _report_chain(self, trace: ChainTrace) -> None:
+        outcome = "Complete" if trace.success else "Failed"
+        usage = trace.total_usage
+        print(f"{self.prefix} {outcome}: {usage.total_tokens} tokens, ${usage.cost_usd:.4f}")

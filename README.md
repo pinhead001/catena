@@ -140,22 +140,36 @@ async def step2(ctx: Context) -> Context:
 ```python
 from catena.middleware import ConsoleObserver
 
-chain = Chain()
-observer = ConsoleObserver(verbose=True)
-
-@chain.on("before_step")
-def on_start(name, ctx):
-    observer.on_step_start(name)
-
-@chain.on("after_step")
-def on_end(name, ctx, duration):
-    observer.on_step_end(name, ctx, duration)
+chain = Chain(name="my-chain")
+chain.observe(ConsoleObserver(verbose=True))
 
 # Output:
 # [catena] Starting chain: my-chain
 # [catena]   -> step1
 # [catena]   <- step1 (234ms, 150 tokens, $0.0003)
 # [catena] Complete: 150 tokens, $0.0003
+```
+
+Collect traces instead of printing them, with what each step took and cost:
+
+```python
+from catena.middleware import TraceCollector
+
+traces = chain.observe(TraceCollector())
+await chain.run("Hello")
+traces.to_dict()
+# [{"chain": "my-chain", "duration_ms": 234.1, "success": True,
+#   "total_tokens": 150, "total_cost_usd": 0.0003,
+#   "steps": [{"name": "step1", "duration_ms": 233.9, "success": True,
+#              "error": None, "tokens": 150, "cost_usd": 0.0003}]}]
+```
+
+For one-off callbacks, hook an event directly:
+
+```python
+@chain.on("on_error")  # also "before_step", "after_step"
+def alert(name, error, ctx):
+    print(f"{name} failed: {error}")
 ```
 
 ### Tool Calling
