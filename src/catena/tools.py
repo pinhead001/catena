@@ -28,13 +28,25 @@ _JSON_TYPE_MAP: dict[Any, str] = {
     type(None): "null",
 }
 
-_DOC_SECTIONS = ("Args:", "Arguments:", "Parameters:", "Returns:", "Raises:", "Yields:", "Example")
+_ARG_SECTIONS = ("Args:", "Arguments:", "Parameters:")
+_DOC_SECTIONS = (
+    *_ARG_SECTIONS,
+    "Returns:",
+    "Raises:",
+    "Yields:",
+    "Example:",
+    "Examples:",
+    "Note:",
+    "Notes:",
+)
 
 
 def _schema_for_type(annotation: Any, defs: dict[str, Any]) -> dict[str, Any]:
     """JSON schema for one type annotation; shared definitions go into `defs`."""
-    if annotation in _JSON_TYPE_MAP:
+    if isinstance(annotation, type) and annotation in _JSON_TYPE_MAP:
         return {"type": _JSON_TYPE_MAP[annotation]}
+    if annotation is None:
+        return {"type": "null"}
 
     origin, args = get_origin(annotation), get_args(annotation)
 
@@ -78,7 +90,7 @@ def _split_docstring(doc: str) -> tuple[str, dict[str, str]]:
     """
     lines = doc.splitlines()
     first_section = next(
-        (i for i, line in enumerate(lines) if line.strip().startswith(_DOC_SECTIONS)),
+        (i for i, line in enumerate(lines) if line.strip() in _DOC_SECTIONS),
         len(lines),
     )
     summary = "\n".join(lines[:first_section]).strip()
@@ -89,8 +101,8 @@ def _split_docstring(doc: str) -> tuple[str, dict[str, str]]:
     in_args = False
     for line in lines[first_section:]:
         stripped = line.strip()
-        if stripped.startswith(_DOC_SECTIONS):
-            in_args = stripped.startswith(("Args:", "Arguments:", "Parameters:"))
+        if stripped in _DOC_SECTIONS:
+            in_args = stripped in _ARG_SECTIONS
             current = None
         elif in_args and stripped:
             entry = re.match(r"(\*{0,2}\w+)\s*(?:\([^)]*\))?:\s*(.*)", stripped)

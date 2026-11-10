@@ -368,3 +368,27 @@ async def test_run_tools_stops_at_max_turns_and_reports_what_was_spent():
 async def test_run_tools_rejects_a_zero_turn_budget():
     with pytest.raises(ValueError, match="max_turns"):
         await _Scripted([]).run_tools([Message.user("go")], tools=[add], max_turns=0)
+
+
+def test_description_starting_with_example_is_kept():
+    @tool
+    def demo(city: str) -> str:
+        """Example lookup tool: returns a canned forecast.
+
+        Note that the data is fake.
+        """
+        return ""
+
+    assert demo.description.startswith("Example lookup tool")
+    assert "data is fake" in demo.description
+
+
+def test_annotated_with_unhashable_metadata_still_builds_a_schema():
+    from typing import Annotated
+
+    def f(count: Annotated[int, {"unit": "items"}], nothing: None = None) -> str:
+        return ""
+
+    props = _parameters(f)["properties"]
+
+    assert props == {"count": {"type": "integer"}, "nothing": {"type": "null"}}

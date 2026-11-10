@@ -380,3 +380,27 @@ async def test_retry_on_overrides_the_default_policy():
     assert (
         await _attempts_for(ValueError("bad"), retry_on=lambda e: isinstance(e, ValueError)) == 3
     )
+
+
+@pytest.mark.asyncio
+async def test_step_that_forgets_to_return_the_context_gets_a_clear_error():
+    chain = Chain()
+
+    @chain.step()
+    async def forgetful(ctx: Context) -> Context:  # type: ignore[return]
+        ctx.set("done", True)
+
+    with pytest.raises(TypeError, match="return ctx"):
+        await chain.run()
+
+
+@pytest.mark.asyncio
+async def test_a_steps_own_timeout_error_is_not_reworded():
+    chain = Chain()
+
+    @chain.step(retries=0)
+    async def slow_upstream(ctx: Context) -> Context:
+        raise TimeoutError("upstream took too long")
+
+    with pytest.raises(TimeoutError, match="upstream took too long"):
+        await chain.run()

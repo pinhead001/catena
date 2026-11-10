@@ -79,13 +79,13 @@ class Step:
                         timeout=self.config.timeout,
                     )
                 return await self.func(attempt_ctx)
-            except asyncio.TimeoutError:
-                last_error: Exception = TimeoutError(
-                    f"Step '{self.config.name}' timed out after {self.config.timeout}s"
-                )
             except Exception as e:
-                last_error = e
-                if not self.config.retry_on(e):
+                last_error: Exception = e
+                if isinstance(e, asyncio.TimeoutError) and self.config.timeout:
+                    last_error = TimeoutError(
+                        f"Step '{self.config.name}' timed out after {self.config.timeout}s"
+                    )
+                if not self.config.retry_on(last_error):
                     break
 
             if attempt < attempts - 1:
@@ -273,6 +273,12 @@ class Chain:
             for observer in self._observers:
                 observer.on_step_error(name, e)
             raise
+
+        if not isinstance(result, Context):
+            raise TypeError(
+                f"Step '{name}' returned {type(result).__name__}, not the Context; "
+                "end the step with `return ctx`"
+            )
 
         elapsed = time.perf_counter() - start
         await self._emit("after_step", name, result, elapsed)
