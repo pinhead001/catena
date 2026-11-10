@@ -32,7 +32,10 @@ print(f"Cost: ${result.usage.cost_usd:.4f}")
 - **Retries** - Built-in exponential backoff
 - **Parallel execution** - Process batches efficiently
 - **Composable** - Chain chains together with `>>`
-- **Observable** - Hook into execution events
+- **Observable** - Trace every step's time, tokens and cost
+- **Tools** - Turn a function into a tool; one call runs the whole tool loop
+- **Structured output** - Typed responses validated against a Pydantic model
+- **Any model** - OpenAI, Anthropic, or anything with an `llm` plugin
 
 ## Installation
 
@@ -174,28 +177,47 @@ def alert(name, error, ctx):
 
 ### Tool Calling
 
+Turn any function into a tool. Its type hints become the schema and its docstring tells the model when and how to use it:
+
 ```python
-from catena import Message, providers
-from catena.tools import tool, run_tool_calls
+from typing import Literal
+from catena import Message, providers, tool
 
 @tool
-def get_weather(city: str) -> str:
-    """Get the current weather for a city."""
-    return f"72F and sunny in {city}"
+def get_weather(city: str, units: Literal["c", "f"] = "c") -> str:
+    """Get the current weather for a city.
+
+    Args:
+        city: The city name, e.g. "Tokyo".
+        units: Celsius or Fahrenheit.
+    """
+    return f"22 degrees and sunny in {city}"
 
 provider = providers.openai()
-messages = [Message.user("What's the weather in Tokyo?")]
+run = await provider.run_tools(
+    [Message.user("What's the weather in Tokyo?")],
+    tools=[get_weather],
+)
 
-response = await provider.complete(messages, tools=[get_weather])
-messages.append(response.message)
-
-if response.has_tool_calls:
-    results = await run_tool_calls([get_weather], response.tool_calls)
-    for tool_call_id, content in results:
-        messages.append(Message.tool(content, tool_call_id=tool_call_id))
-
-    response = await provider.complete(messages, tools=[get_weather])
+print(run.content)          # "It's 22 degrees and sunny in Tokyo."
+print(run.turns)            # 2 model calls: one to ask for the tool, one to answer
+print(run.usage.cost_usd)   # total across both
 ```
+
+`run_tools` calls the model, runs the tools it asks for (in parallel), sends the results back, and repeats until the model answers. A tool that raises is reported to the model so it can recover. `max_turns` (default 10) caps the number of model calls; beyond it `ToolLoopError` is raised, carrying the conversation and cost so far.
+
+Inside a chain step, keep the whole exchange in the context:
+
+```python
+@chain.step()
+async def research(ctx: Context) -> Context:
+    run = await provider.run_tools(ctx.messages, tools=[get_weather])
+    ctx.messages = run.messages
+    ctx.add_usage(run.usage)
+    return ctx
+```
+
+To run the loop yourself, pass `tools=` to `provider.complete()` and use `catena.tools.run_tool_calls` on `response.tool_calls`.
 
 ### Structured Output
 
@@ -351,6 +373,14 @@ await provider.complete(
     tools: list[Tool] = None,
     tool_choice: str = None,  # "auto", "none", "required", or one tool's name
 ) -> Response
+
+# Tool loop: call the model and run its tool calls until it answers
+await provider.run_tools(
+    messages: list[Message],
+    tools: list[Tool],
+    max_turns: int = 10,      # cap on model calls; ToolLoopError beyond it
+    tool_choice: str = None,  # applies to the first model call only
+) -> ToolRun  # .content, .response, .messages, .usage, .turns
 
 # Streaming (yields StreamChunk; the last chunk has done=True and `usage`)
 async for chunk in provider.stream(

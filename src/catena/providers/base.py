@@ -15,7 +15,7 @@ from catena.structured import (
     parse_output,
     schema_tool,
 )
-from catena.tools import Tool
+from catena.tools import Tool, ToolLoopError, ToolRun, run_tool_calls
 
 
 class Provider(ABC):
@@ -141,6 +141,55 @@ class Provider(ABC):
         raise StructuredOutputError(
             f"No valid {schema.__name__} after {retries + 1} attempts: {error}",
             raw_output=raw,
+            usage=usage,
+        )
+
+    async def run_tools(
+        self,
+        messages: list[Message],
+        tools: list[Tool],
+        *,
+        max_turns: int = 10,
+        tool_choice: str | None = None,
+        **kwargs: Any,
+    ) -> ToolRun:
+        """Let the model use tools until it answers.
+
+        Calls the model, runs the tools it asks for (in parallel), sends the
+        results back, and repeats until the model replies without a tool call.
+        A tool that raises is reported to the model as an error so it can
+        recover. `tool_choice` applies to the first model call only; `max_turns`
+        caps the number of model calls, raising `ToolLoopError` beyond it.
+
+        Example:
+            ```python
+            run = await provider.run_tools(ctx.messages, tools=[get_weather])
+            ctx.messages = run.messages
+            ctx.add_usage(run.usage)
+            ```
+        """
+        if max_turns < 1:
+            raise ValueError(f"max_turns must be >= 1, got {max_turns}")
+
+        history = list(messages)
+        usage = Usage()
+
+        for turn in range(1, max_turns + 1):
+            response = await self.complete(
+                history, tools=tools, tool_choice=tool_choice if turn == 1 else None, **kwargs
+            )
+            usage = usage + response.usage
+            history.append(response.message)
+
+            if not response.tool_calls:
+                return ToolRun(response=response, messages=history, usage=usage, turns=turn)
+
+            for tool_call_id, content in await run_tool_calls(tools, response.tool_calls):
+                history.append(Message.tool(content, tool_call_id=tool_call_id))
+
+        raise ToolLoopError(
+            f"The model was still calling tools after {max_turns} turns",
+            messages=history,
             usage=usage,
         )
 

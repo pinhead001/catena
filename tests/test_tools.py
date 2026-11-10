@@ -2,6 +2,7 @@
 
 import pytest
 
+from catena import Message, Provider, Response, ToolLoopError, Usage
 from catena.models import ToolCall
 from catena.tools import Tool, run_tool_calls, tool
 
@@ -101,3 +102,269 @@ async def test_run_tool_calls_reports_argument_error_without_calling():
 
     assert results == [("1", "Error: Arguments were not valid JSON")]
     assert called == []
+
+
+def _parameters(func):  # type: ignore[no-untyped-def]
+    return tool(func).parameters
+
+
+def test_schema_for_collections_and_optionals():
+    def search(
+        tags: list[str],
+        limit: int | None = None,
+        weights: dict[str, float] | None = None,
+        point: tuple[float, float] = (0, 0),
+    ) -> str:
+        return ""
+
+    props = _parameters(search)["properties"]
+
+    assert props["tags"] == {"type": "array", "items": {"type": "string"}}
+    assert props["limit"] == {"anyOf": [{"type": "integer"}, {"type": "null"}]}
+    assert props["weights"]["anyOf"][0] == {
+        "type": "object",
+        "additionalProperties": {"type": "number"},
+    }
+    assert props["point"] == {
+        "type": "array",
+        "prefixItems": [{"type": "number"}, {"type": "number"}],
+    }
+    assert _parameters(search)["required"] == ["tags"]
+
+
+def test_schema_for_literal_and_enum():
+    import enum
+    from typing import Literal
+
+    class Color(enum.Enum):
+        RED = "red"
+        BLUE = "blue"
+
+    def paint(units: Literal["c", "f"], color: Color) -> str:
+        return ""
+
+    props = _parameters(paint)["properties"]
+
+    assert props["units"] == {"enum": ["c", "f"]}
+    assert props["color"] == {"enum": ["red", "blue"]}
+
+
+def test_schema_for_pydantic_model_hoists_definitions():
+    from pydantic import BaseModel
+
+    class Address(BaseModel):
+        city: str
+
+    class Person(BaseModel):
+        name: str
+        address: Address
+
+    def save(person: Person) -> str:
+        return ""
+
+    parameters = _parameters(save)
+
+    assert parameters["properties"]["person"]["properties"]["address"] == {
+        "$ref": "#/$defs/Address"
+    }
+    assert "Address" in parameters["$defs"]
+    assert "$defs" not in parameters["properties"]["person"]
+
+
+def test_unknown_types_are_unconstrained_and_unannotated_are_strings():
+    from typing import Any
+
+    def f(anything: Any, plain, *args: int, **kwargs: str) -> str:  # type: ignore[no-untyped-def]
+        return ""
+
+    parameters = _parameters(f)
+
+    assert parameters["properties"] == {"anything": {}, "plain": {"type": "string"}}
+    assert parameters["required"] == ["anything", "plain"]
+
+
+def test_argument_descriptions_come_from_the_docstring():
+    @tool
+    def get_weather(city: str, units: str = "celsius", days: int = 1) -> str:
+        """Get the weather forecast for a city.
+
+        Use this for any question about weather.
+
+        Args:
+            city: The city name, e.g. "Tokyo".
+            units (str): "celsius" or "fahrenheit";
+                defaults to celsius.
+
+        Returns:
+            A one-line forecast.
+        """
+        return ""
+
+    props = get_weather.parameters["properties"]
+
+    assert get_weather.description == (
+        "Get the weather forecast for a city.\n\nUse this for any question about weather."
+    )
+    assert props["city"] == {"type": "string", "description": 'The city name, e.g. "Tokyo".'}
+    assert props["units"]["description"] == '"celsius" or "fahrenheit"; defaults to celsius.'
+    assert props["days"] == {"type": "integer"}
+
+
+def test_annotated_string_describes_a_parameter():
+    from typing import Annotated
+
+    def f(city: Annotated[str, "The city name"]) -> str:
+        """Look something up.
+
+        Args:
+            city: Ignored, the annotation wins.
+        """
+        return ""
+
+    assert _parameters(f)["properties"]["city"] == {
+        "type": "string",
+        "description": "The city name",
+    }
+
+
+@pytest.mark.asyncio
+async def test_structured_tool_results_are_sent_as_json():
+    from pydantic import BaseModel
+
+    class Forecast(BaseModel):
+        high: int
+
+    tools = [
+        Tool(name="a", description="", func=lambda: {"high": 72, "ok": True}),
+        Tool(name="b", description="", func=lambda: Forecast(high=72)),
+        Tool(name="c", description="", func=lambda: "plain text"),
+        Tool(name="d", description="", func=lambda: None),
+    ]
+    calls = [ToolCall(id=t.name, name=t.name, arguments={}) for t in tools]
+
+    results = dict(await run_tool_calls(tools, calls))
+
+    assert results == {
+        "a": '{"high": 72, "ok": true}',
+        "b": '{"high":72}',
+        "c": "plain text",
+        "d": "null",
+    }
+
+
+class _Scripted(Provider):
+    """Returns pre-scripted responses and records every call."""
+
+    def __init__(self, responses: list[Response]) -> None:
+        self.responses = responses
+        self.calls: list[dict] = []
+
+    async def complete(self, messages, **kwargs):  # type: ignore[no-untyped-def]
+        self.calls.append({"messages": list(messages), **kwargs})
+        return self.responses.pop(0)
+
+    async def stream(self, messages, **kwargs):  # type: ignore[no-untyped-def]
+        raise NotImplementedError
+        yield
+
+
+def _asks(*calls: ToolCall, cost: float = 0.01) -> Response:
+    return Response(content="", usage=Usage(cost_usd=cost), tool_calls=list(calls))
+
+
+@tool
+def add(a: int, b: int) -> int:
+    """Add two numbers."""
+    return a + b
+
+
+@pytest.mark.asyncio
+async def test_run_tools_loops_until_the_model_answers():
+    provider = _Scripted(
+        [
+            _asks(ToolCall(id="c1", name="add", arguments={"a": 2, "b": 40})),
+            _asks(ToolCall(id="c2", name="add", arguments={"a": 42, "b": 1})),
+            Response(content="43", usage=Usage(cost_usd=0.01)),
+        ]
+    )
+    question = [Message.user("2 + 40 + 1?")]
+
+    run = await provider.run_tools(question, tools=[add])
+
+    assert run.content == "43"
+    assert run.turns == 3
+    assert run.usage.cost_usd == pytest.approx(0.03)
+    assert [m.role.value for m in run.messages] == [
+        "user", "assistant", "tool", "assistant", "tool", "assistant",
+    ]  # fmt: skip
+    assert [m.content for m in run.messages if m.role.value == "tool"] == ["42", "43"]
+    assert run.messages[2].tool_call_id == "c1"
+    assert len(question) == 1
+    # The second model call saw the first tool result.
+    assert provider.calls[1]["messages"][-1].content == "42"
+
+
+@pytest.mark.asyncio
+async def test_run_tools_without_tool_calls_is_one_turn():
+    provider = _Scripted([Response(content="hello")])
+
+    run = await provider.run_tools([Message.user("hi")], tools=[add], temperature=0.2)
+
+    assert (run.content, run.turns) == ("hello", 1)
+    assert provider.calls[0]["temperature"] == 0.2
+
+
+@pytest.mark.asyncio
+async def test_run_tools_answers_parallel_calls_and_reports_tool_errors():
+    provider = _Scripted(
+        [
+            _asks(
+                ToolCall(id="c1", name="add", arguments={"a": 1, "b": 2}),
+                ToolCall(id="c2", name="add", arguments={"a": 1}),
+                ToolCall(id="c3", name="missing", arguments={}),
+            ),
+            Response(content="done"),
+        ]
+    )
+
+    run = await provider.run_tools([Message.user("go")], tools=[add])
+
+    results = [m for m in run.messages if m.role.value == "tool"]
+    assert [m.tool_call_id for m in results] == ["c1", "c2", "c3"]
+    assert results[0].content == "3"
+    assert results[1].content.startswith("Error:")
+    assert results[2].content == "Error: unknown tool 'missing'"
+
+
+@pytest.mark.asyncio
+async def test_run_tools_applies_tool_choice_to_the_first_turn_only():
+    provider = _Scripted(
+        [
+            _asks(ToolCall(id="c1", name="add", arguments={"a": 1, "b": 2})),
+            Response(content="3"),
+        ]
+    )
+
+    await provider.run_tools([Message.user("go")], tools=[add], tool_choice="required")
+
+    assert [c["tool_choice"] for c in provider.calls] == ["required", None]
+
+
+@pytest.mark.asyncio
+async def test_run_tools_stops_at_max_turns_and_reports_what_was_spent():
+    provider = _Scripted(
+        [_asks(ToolCall(id=f"c{i}", name="add", arguments={"a": 1, "b": 1})) for i in range(5)]
+    )
+
+    with pytest.raises(ToolLoopError, match="2 turns") as exc_info:
+        await provider.run_tools([Message.user("go")], tools=[add], max_turns=2)
+
+    assert len(provider.calls) == 2
+    assert exc_info.value.usage.cost_usd == pytest.approx(0.02)
+    assert len(exc_info.value.messages) == 5
+
+
+@pytest.mark.asyncio
+async def test_run_tools_rejects_a_zero_turn_budget():
+    with pytest.raises(ValueError, match="max_turns"):
+        await _Scripted([]).run_tools([Message.user("go")], tools=[add], max_turns=0)
