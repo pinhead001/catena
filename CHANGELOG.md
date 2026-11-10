@@ -6,7 +6,7 @@
 
 - **Any model through `llm`**: `providers.llm("model-id")` runs Catena on every
   model the [`llm`](https://llm.datasette.io) library can reach. Install with
-  `pip install catena-ai[llm]`.
+  `pip install "catena-ai[llm]"` (Python 3.11+).
 - **Tool loop**: `provider.run_tools(messages, tools=[...])` calls the model,
   runs the tools it asks for, and repeats until it answers.
 - **Better tool schemas**: `@tool` describes lists, dicts, optionals, `Literal`,

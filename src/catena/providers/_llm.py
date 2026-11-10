@@ -43,8 +43,9 @@ class LLMProvider(Provider):
             import llm
         except ImportError:
             raise ImportError(
-                "llm package not installed. Install with: pip install catena-ai[llm]"
-            )
+                "llm package not installed (it needs Python 3.11+). "
+                'Install with: pip install "catena-ai[llm]"'
+            ) from None
 
         self._llm = llm
         self._key = key

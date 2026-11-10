@@ -45,7 +45,7 @@ pip install catena-ai
 pip install "catena-ai[openai]"
 pip install "catena-ai[anthropic]"
 pip install "catena-ai[structured]"  # Pydantic, for structured output
-pip install "catena-ai[llm]"         # any model with an `llm` plugin
+pip install "catena-ai[llm]"         # any model with an `llm` plugin (Python 3.11+)
 pip install "catena-ai[all]"
 ```
 
@@ -248,7 +248,7 @@ To run the loop yourself, pass `tools=` to `provider.complete()` and use `catena
 
 ### Structured Output
 
-Get validated, typed objects instead of strings. Requires `pip install catena-ai[structured]`.
+Get validated, typed objects instead of strings. Requires `pip install "catena-ai[structured]"`.
 
 ```python
 from datetime import date
@@ -310,7 +310,7 @@ async def answer(ctx: Context) -> Context:
 
 ### Any Model, via `llm`
 
-[`llm`](https://llm.datasette.io) reaches dozens of hosted and local models through plugins. `providers.llm()` puts all of them behind Catena's chains, retries, cost tracking and caching. Requires `pip install catena-ai[llm]`.
+[`llm`](https://llm.datasette.io) reaches dozens of hosted and local models through plugins. `providers.llm()` puts all of them behind Catena's chains, retries, cost tracking and caching. Requires `pip install "catena-ai[llm]"` and Python 3.11 or newer.
 
 ```python
 # One-time setup, on the command line:
