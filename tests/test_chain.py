@@ -334,3 +334,49 @@ async def test_step_changing_a_message_does_not_change_the_callers_message():
 
     assert question.content == "doc"
     assert result.messages[0].content == "Summarize: doc"  # wrapped once, not twice
+
+
+class _HttpError(Exception):
+    def __init__(self, status_code: int) -> None:
+        super().__init__(f"HTTP {status_code}")
+        self.status_code = status_code
+
+
+async def _attempts_for(error: Exception, **step_options) -> int:  # type: ignore[no-untyped-def]
+    chain = Chain()
+    attempts = []
+
+    @chain.step(retries=2, retry_delay=0, **step_options)
+    async def failing(ctx: Context) -> Context:
+        attempts.append(1)
+        raise error
+
+    with pytest.raises(type(error)):
+        await chain.run()
+    return len(attempts)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("status", "expected_attempts"),
+    [(400, 1), (401, 1), (404, 1), (408, 3), (409, 3), (429, 3), (500, 3), (529, 3)],
+)
+async def test_http_errors_are_retried_only_when_a_retry_can_help(status, expected_attempts):
+    assert await _attempts_for(_HttpError(status)) == expected_attempts
+
+
+@pytest.mark.asyncio
+async def test_errors_that_used_their_own_budget_are_not_retried():
+    from catena import StructuredOutputError, ToolLoopError, Usage
+
+    assert await _attempts_for(StructuredOutputError("no valid output")) == 1
+    assert await _attempts_for(ToolLoopError("too many turns", [], Usage())) == 1
+
+
+@pytest.mark.asyncio
+async def test_retry_on_overrides_the_default_policy():
+    assert await _attempts_for(_HttpError(401), retry_on=lambda error: True) == 3
+    assert await _attempts_for(RuntimeError("bug"), retry_on=lambda error: False) == 1
+    assert (
+        await _attempts_for(ValueError("bad"), retry_on=lambda e: isinstance(e, ValueError)) == 3
+    )

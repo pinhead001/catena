@@ -27,6 +27,8 @@ class StructuredResponse(Generic[T]):
 class StructuredOutputError(Exception):
     """Raised when the model fails to produce valid output within the retry budget."""
 
+    retryable = False  # a chain step does not retry it: it has used its own retries
+
     def __init__(
         self,
         message: str,

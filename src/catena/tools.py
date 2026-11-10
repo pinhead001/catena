@@ -243,6 +243,8 @@ class ToolLoopError(Exception):
     `messages` and `usage` hold the conversation and cost so far.
     """
 
+    retryable = False  # a chain step does not retry it: the loop has used its budget
+
     def __init__(self, message: str, messages: list[Message], usage: Usage) -> None:
         super().__init__(message)
         self.messages = messages

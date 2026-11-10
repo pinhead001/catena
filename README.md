@@ -107,6 +107,13 @@ total_cost = sum(r.usage.cost_usd for r in results)
 print(f"Processed {len(results)} docs for ${total_cost:.2f}")
 ```
 
+One failed document raises and stops the rest. To keep what succeeded, ask for failures in place:
+
+```python
+results = await map_parallel(summarize_chain, documents, return_exceptions=True)
+failed = [r for r in results if isinstance(r, Exception)]
+```
+
 ### Caching
 
 ```python
@@ -322,7 +329,11 @@ Chain(name: str = "chain")
     retries: int = 3,      # Tries after the first failure (0 = run once)
     retry_delay: float = 1.0,  # Seconds before the first retry; doubles each time
     timeout: float = None, # Timeout per attempt, in seconds
+    retry_on: Callable[[Exception], bool] = should_retry,
 )
+# By default every error is retried except ones a retry cannot fix: a bad API
+# key or invalid request (HTTP 4xx other than 408/409/429), and errors that
+# already used their own budget (StructuredOutputError, ToolLoopError).
 
 # Run the chain
 await chain.run(

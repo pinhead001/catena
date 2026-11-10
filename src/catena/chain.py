@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import functools
 import inspect
+import random
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -24,6 +25,23 @@ StepFunc = Callable[[Context], Awaitable[Context]]
 SyncStepFunc = Callable[[Context], Context]
 
 
+def should_retry(error: Exception) -> bool:
+    """The default retry policy: retry unless trying again cannot help.
+
+    Not retried: errors that say so themselves (`retryable = False`, as on
+    `StructuredOutputError` and `ToolLoopError`, which have already used
+    their own budget), and HTTP errors that mean the request itself is wrong
+    (4xx such as a bad API key or an invalid request), other than timeouts,
+    conflicts and rate limits (408, 409, 429).
+    """
+    if getattr(error, "retryable", True) is False:
+        return False
+    status = getattr(error, "status_code", None)
+    if isinstance(status, int) and 400 <= status < 500:
+        return status in (408, 409, 429)
+    return True
+
+
 @dataclass
 class StepConfig:
     """Configuration for a chain step."""
@@ -32,6 +50,7 @@ class StepConfig:
     retries: int = 3
     retry_delay: float = 1.0
     timeout: float | None = None
+    retry_on: Callable[[Exception], bool] = should_retry
 
     def __post_init__(self) -> None:
         if self.retries < 0:
@@ -66,9 +85,13 @@ class Step:
                 )
             except Exception as e:
                 last_error = e
+                if not self.config.retry_on(e):
+                    break
 
             if attempt < attempts - 1:
-                await asyncio.sleep(self.config.retry_delay * (2**attempt))
+                # Jittered, so parallel runs that fail together don't retry together.
+                delay = self.config.retry_delay * (2**attempt)
+                await asyncio.sleep(delay * random.uniform(0.75, 1.25))
 
         raise last_error
 
@@ -109,11 +132,14 @@ class Chain:
         retries: int = 3,
         retry_delay: float = 1.0,
         timeout: float | None = None,
+        retry_on: Callable[[Exception], bool] = should_retry,
     ) -> Callable[[StepFunc | SyncStepFunc], StepFunc]:
         """Decorator to register a step in the chain.
 
         `retries` is how many times to try again after a failure, with
         exponential backoff starting at `retry_delay` seconds; 0 runs the step once.
+        `retry_on` decides whether an error is worth another try; by default
+        everything is, except errors a retry cannot fix (see `should_retry`).
         """
 
         def decorator(func: StepFunc | SyncStepFunc) -> StepFunc:
@@ -136,6 +162,7 @@ class Chain:
                 retries=retries,
                 retry_delay=retry_delay,
                 timeout=timeout,
+                retry_on=retry_on,
             )
             self.steps.append(Step(func=wrapped, config=config))
             return wrapped
@@ -283,6 +310,7 @@ def step(
     retries: int = 3,
     retry_delay: float = 1.0,
     timeout: float | None = None,
+    retry_on: Callable[[Exception], bool] = should_retry,
 ) -> Callable[[StepFunc], StepFunc]: ...
 
 
@@ -293,6 +321,7 @@ def step(
     retries: int = 3,
     retry_delay: float = 1.0,
     timeout: float | None = None,
+    retry_on: Callable[[Exception], bool] = should_retry,
 ) -> StepFunc | Callable[[StepFunc], StepFunc]:
     """Make a function a reusable step; add it to chains with `chain.add_step()`."""
 
@@ -307,6 +336,7 @@ def step(
             retries=retries,
             retry_delay=retry_delay,
             timeout=timeout,
+            retry_on=retry_on,
         )
         return wrapper
 
