@@ -224,3 +224,82 @@ async def test_provider_cached_covers_complete_and_what_is_built_on_it():
     assert provider.calls == 2  # one plain call, one with tools; the repeats were cached
     assert again.usage.cost_usd == 0
     assert (run.usage.cost_usd, rerun.usage.cost_usd) == (0.01, 0)
+
+
+@pytest.mark.asyncio
+async def test_sqlite_cache_survives_reopening(tmp_path):
+    from catena.middleware import SQLiteCache
+
+    path = tmp_path / "cache.db"
+    call = ToolCall(id="c1", name="add", arguments={"a": 1})
+    stored = Response(
+        content="hi",
+        model="m",
+        usage=Usage(input_tokens=10, output_tokens=5, cost_usd=0.01),
+        metadata={"finish_reason": "stop"},
+        tool_calls=[call],
+    )
+
+    first = SQLiteCache(path)
+    await first.set("k", stored)
+    first.close()
+
+    reopened = SQLiteCache(path)
+    hit = await reopened.get("k")
+
+    assert hit.content == "hi"
+    assert hit.model == "m"
+    assert hit.tool_calls == [call]
+    assert hit.metadata == {"finish_reason": "stop"}
+    assert (hit.usage.input_tokens, hit.usage.output_tokens, hit.usage.cost_usd) == (10, 5, 0)
+    assert await reopened.get("missing") is None
+    assert reopened.stats == {"hits": 1, "misses": 1}
+    reopened.close()
+
+
+@pytest.mark.asyncio
+async def test_sqlite_cache_ttl_overwrite_and_clear(tmp_path, monkeypatch):
+    from catena.middleware import SQLiteCache
+
+    now = [1000.0]
+    monkeypatch.setattr("catena.middleware.cache.time.time", lambda: now[0])
+    cache = SQLiteCache(tmp_path / "cache.db")
+
+    await cache.set("forever", Response(content="a"))
+    await cache.set("brief", Response(content="b"), ttl=60)
+    await cache.set("forever", Response(content="a2"))
+    now[0] += 61
+
+    assert (await cache.get("forever")).content == "a2"
+    assert await cache.get("brief") is None
+
+    await cache.clear()
+    assert await cache.get("forever") is None
+    cache.close()
+
+
+@pytest.mark.asyncio
+async def test_sqlite_cache_serves_a_wrapped_provider_across_instances(tmp_path):
+    from catena.middleware import SQLiteCache
+
+    path = tmp_path / "cache.db"
+    provider = CountingProvider()
+
+    first = await SQLiteCache(path).wrap(provider.complete)([Message.user("hi")])
+    second = await SQLiteCache(path).wrap(provider.complete)([Message.user("hi")])
+
+    assert provider.calls == 1
+    assert second.content == first.content
+    assert second.metadata["cached"] is True
+
+
+def test_response_round_trips_through_a_dict():
+    response = Response(
+        content="hi",
+        model="m",
+        usage=Usage(input_tokens=1, output_tokens=2, cost_usd=0.5),
+        metadata={"stop_reason": "end_turn"},
+        tool_calls=[ToolCall(id="c", name="t", arguments={"x": [1, 2]}, error="bad")],
+    )
+
+    assert Response.from_dict(response.to_dict()) == response

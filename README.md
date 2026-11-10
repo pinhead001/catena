@@ -129,6 +129,14 @@ cache.hit_rate  # 0.5
 
 A call is served from the cache only when everything that shapes the answer matches: messages, model, system prompt, tools, and options. Tool loops and structured output are cached too; streaming is not.
 
+`MemoryCache` lasts as long as the process. To keep answers between runs (handy while developing: rerunning a script replays earlier answers instantly and for free), use a file:
+
+```python
+from catena.middleware import SQLiteCache
+
+provider = providers.openai().cached(SQLiteCache(".catena-cache.db"))
+```
+
 ### Cost Tracking
 
 Every response carries its token counts and cost, and `ctx.add_response()` totals them across a chain. Prices for current OpenAI and Anthropic models are built in; a model with no known price is tracked at $0, so add your own:

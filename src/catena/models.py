@@ -112,6 +112,33 @@ class Response:
     def has_tool_calls(self) -> bool:
         return len(self.tool_calls) > 0
 
+    def to_dict(self) -> dict[str, Any]:
+        """A JSON-serializable form of the response; `from_dict` reverses it."""
+        return {
+            "content": self.content,
+            "model": self.model,
+            "usage": {
+                "input_tokens": self.usage.input_tokens,
+                "output_tokens": self.usage.output_tokens,
+                "cost_usd": self.usage.cost_usd,
+            },
+            "metadata": self.metadata,
+            "tool_calls": [
+                {"id": tc.id, "name": tc.name, "arguments": tc.arguments, "error": tc.error}
+                for tc in self.tool_calls
+            ],
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> Response:
+        return cls(
+            content=data["content"],
+            model=data.get("model", ""),
+            usage=Usage(**data.get("usage", {})),
+            metadata=dict(data.get("metadata", {})),
+            tool_calls=[ToolCall(**tc) for tc in data.get("tool_calls", [])],
+        )
+
 
 @dataclass
 class StreamChunk:

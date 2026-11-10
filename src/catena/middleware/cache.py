@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import sqlite3
 import time
 from abc import ABC, abstractmethod
 from collections.abc import Callable
@@ -44,6 +46,21 @@ def _hash_messages(messages: list[Message], model: str, **kwargs: Any) -> str:
     return hashlib.sha256(content.encode()).hexdigest()[:32]
 
 
+def _free_copy(response: Response) -> Response:
+    """A copy of a stored response at zero cost: a cache hit is free."""
+    return Response(
+        content=response.content,
+        model=response.model,
+        usage=Usage(
+            input_tokens=response.usage.input_tokens,
+            output_tokens=response.usage.output_tokens,
+            cost_usd=0.0,
+        ),
+        metadata=response.metadata.copy(),
+        tool_calls=list(response.tool_calls),
+    )
+
+
 @dataclass
 class CacheEntry:
     """A cached response with metadata."""
@@ -56,6 +73,8 @@ class CacheEntry:
 
 class Cache(ABC):
     """Abstract cache interface."""
+
+    _stats: dict[str, int]
 
     @abstractmethod
     async def get(self, key: str) -> Response | None:
@@ -71,6 +90,17 @@ class Cache(ABC):
     async def clear(self) -> None:
         """Clear all cached entries."""
         ...
+
+    @property
+    def stats(self) -> dict[str, int]:
+        """Hits and misses since the cache was created or cleared."""
+        return self._stats.copy()
+
+    @property
+    def hit_rate(self) -> float:
+        """Share of lookups served from the cache."""
+        total = self._stats["hits"] + self._stats["misses"]
+        return self._stats["hits"] / total if total > 0 else 0.0
 
     def wrap(
         self,
@@ -150,19 +180,7 @@ class MemoryCache(Cache):
         self._stats["hits"] += 1
         # Dicts keep insertion order: re-inserting marks this entry most recently used.
         self._cache[key] = self._cache.pop(key)
-
-        # Return a copy with zero cost (cached responses are free)
-        return Response(
-            content=entry.response.content,
-            model=entry.response.model,
-            usage=Usage(
-                input_tokens=entry.response.usage.input_tokens,
-                output_tokens=entry.response.usage.output_tokens,
-                cost_usd=0.0,  # Cached = free
-            ),
-            metadata=entry.response.metadata.copy(),
-            tool_calls=list(entry.response.tool_calls),
-        )
+        return _free_copy(entry.response)
 
     async def set(self, key: str, response: Response, ttl: float | None = None) -> None:
         if ttl is None:
@@ -184,13 +202,67 @@ class MemoryCache(Cache):
         self._cache.clear()
         self._stats = {"hits": 0, "misses": 0}
 
-    @property
-    def stats(self) -> dict[str, int]:
-        """Get cache statistics."""
-        return self._stats.copy()
 
-    @property
-    def hit_rate(self) -> float:
-        """Calculate cache hit rate."""
-        total = self._stats["hits"] + self._stats["misses"]
-        return self._stats["hits"] / total if total > 0 else 0.0
+class SQLiteCache(Cache):
+    """A cache kept in a SQLite file, so it survives restarts.
+
+    Useful while developing: rerunning a script replays earlier answers
+    instantly and for free. `default_ttl` is how long an entry lives, in
+    seconds; None (the default) keeps entries until `clear()`.
+
+    Example:
+        ```python
+        from catena.middleware import SQLiteCache
+
+        provider = providers.openai().cached(SQLiteCache(".catena-cache.db"))
+        ```
+    """
+
+    def __init__(
+        self,
+        path: str | os.PathLike[str] = ".catena-cache.db",
+        default_ttl: float | None = None,
+    ) -> None:
+        self.path = os.fspath(path)
+        self.default_ttl = default_ttl
+        self._stats = {"hits": 0, "misses": 0}
+        # Autocommit: every write is on disk when set() returns.
+        self._db = sqlite3.connect(self.path, isolation_level=None)
+        self._db.execute(
+            "CREATE TABLE IF NOT EXISTS responses ("
+            "key TEXT PRIMARY KEY, response TEXT NOT NULL, expires_at REAL)"
+        )
+
+    async def get(self, key: str) -> Response | None:
+        row = self._db.execute(
+            "SELECT response, expires_at FROM responses WHERE key = ?", (key,)
+        ).fetchone()
+        if row is not None and row[1] is not None and time.time() >= row[1]:
+            self._db.execute("DELETE FROM responses WHERE key = ?", (key,))
+            row = None
+        if row is None:
+            self._stats["misses"] += 1
+            return None
+
+        self._stats["hits"] += 1
+        return _free_copy(Response.from_dict(json.loads(row[0])))
+
+    async def set(self, key: str, response: Response, ttl: float | None = None) -> None:
+        if ttl is None:
+            ttl = self.default_ttl
+        self._db.execute(
+            "INSERT OR REPLACE INTO responses (key, response, expires_at) VALUES (?, ?, ?)",
+            (
+                key,
+                json.dumps(response.to_dict(), default=str),
+                None if ttl is None else time.time() + ttl,
+            ),
+        )
+
+    async def clear(self) -> None:
+        self._db.execute("DELETE FROM responses")
+        self._stats = {"hits": 0, "misses": 0}
+
+    def close(self) -> None:
+        """Close the database file."""
+        self._db.close()
