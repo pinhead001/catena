@@ -2,7 +2,7 @@
 
 import asyncio
 
-from catena import Chain, Context, providers
+from catena import Chain, Context, Message, providers
 from catena.parallel import map_parallel
 
 
@@ -14,10 +14,10 @@ async def main():
 
     @summarize.step()
     async def extract_summary(ctx: Context) -> Context:
-        ctx.messages[0].content = f"Summarize this in 2 sentences:\n\n{ctx.messages[0].content}"
+        document = ctx.messages[0].content
+        ctx.messages = [Message.user(f"Summarize this in 2 sentences:\n\n{document}")]
         response = await provider.complete(ctx.messages, max_tokens=100)
-        ctx.add_message(response.message)
-        ctx.add_usage(response.usage)
+        ctx.add_response(response)
         return ctx
 
     # Documents to process
@@ -33,7 +33,7 @@ async def main():
     # Print results
     total_cost = 0.0
     for i, result in enumerate(results):
-        print(f"Document {i + 1}: {result.messages[-1].content}\n")
+        print(f"Document {i + 1}: {result.text}\n")
         total_cost += result.usage.cost_usd
 
     print(f"Total cost: ${total_cost:.4f}")

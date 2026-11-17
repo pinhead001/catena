@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
-from catena.models import Message, Usage
+from catena.models import Message, Response, Usage
 
 
 @dataclass
@@ -30,6 +30,16 @@ class Context:
         """Accumulate usage statistics."""
         self.usage = self.usage + usage
 
+    def add_response(self, response: Response) -> None:
+        """Record a model response: its message joins the history, its usage the total."""
+        self.add_message(response.message)
+        self.add_usage(response.usage)
+
+    @property
+    def text(self) -> str:
+        """The text of the latest message ("" if there are none)."""
+        return self.messages[-1].content if self.messages else ""
+
     def get(self, key: str, default: Any = None) -> Any:
         """Get a value from context data."""
         return self.data.get(key, default)
@@ -39,9 +49,12 @@ class Context:
         self.data[key] = value
 
     def clone(self) -> Context:
-        """Create a shallow copy of the context."""
+        """Copy the context so changes to the copy leave this one alone.
+
+        Messages are copied; values in `data` are shared, not copied.
+        """
         return Context(
-            messages=self.messages.copy(),
+            messages=[replace(message) for message in self.messages],
             data=self.data.copy(),
             usage=Usage(
                 input_tokens=self.usage.input_tokens,

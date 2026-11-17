@@ -19,8 +19,7 @@ async def main():
             ctx.messages,
             temperature=0.3,
         )
-        ctx.add_message(response.message)
-        ctx.add_usage(response.usage)
+        ctx.add_response(response)
         ctx.set("analysis", response.content)
         return ctx
 
@@ -30,8 +29,7 @@ async def main():
         ctx.add_message(Message.user("Now summarize that in one sentence."))
 
         response = await provider.complete(ctx.messages)
-        ctx.add_message(response.message)
-        ctx.add_usage(response.usage)
+        ctx.add_response(response)
         return ctx
 
     # Run the chain

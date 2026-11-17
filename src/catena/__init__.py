@@ -6,9 +6,9 @@ from catena.context import Context
 from catena.models import Message, Response, StreamChunk, ToolCall, Usage
 from catena.providers.base import Provider
 from catena.structured import StructuredOutputError, StructuredResponse
-from catena.tools import Tool, tool
+from catena.tools import Tool, ToolLoopError, ToolRun, tool
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"
 __all__ = [
     "Chain",
     "step",
@@ -22,6 +22,8 @@ __all__ = [
     "StructuredOutputError",
     "StructuredResponse",
     "Tool",
+    "ToolLoopError",
+    "ToolRun",
     "tool",
     "providers",
 ]

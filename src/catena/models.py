@@ -82,6 +82,17 @@ class Usage:
             cost_usd=self.cost_usd + other.cost_usd,
         )
 
+    def __sub__(self, other: Usage) -> Usage:
+        return Usage(
+            input_tokens=self.input_tokens - other.input_tokens,
+            output_tokens=self.output_tokens - other.output_tokens,
+            cost_usd=self.cost_usd - other.cost_usd,
+        )
+
+    @property
+    def total_tokens(self) -> int:
+        return self.input_tokens + self.output_tokens
+
 
 @dataclass
 class Response:
@@ -101,6 +112,33 @@ class Response:
     def has_tool_calls(self) -> bool:
         return len(self.tool_calls) > 0
 
+    def to_dict(self) -> dict[str, Any]:
+        """A JSON-serializable form of the response; `from_dict` reverses it."""
+        return {
+            "content": self.content,
+            "model": self.model,
+            "usage": {
+                "input_tokens": self.usage.input_tokens,
+                "output_tokens": self.usage.output_tokens,
+                "cost_usd": self.usage.cost_usd,
+            },
+            "metadata": self.metadata,
+            "tool_calls": [
+                {"id": tc.id, "name": tc.name, "arguments": tc.arguments, "error": tc.error}
+                for tc in self.tool_calls
+            ],
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> Response:
+        return cls(
+            content=data["content"],
+            model=data.get("model", ""),
+            usage=Usage(**data.get("usage", {})),
+            metadata=dict(data.get("metadata", {})),
+            tool_calls=[ToolCall(**tc) for tc in data.get("tool_calls", [])],
+        )
+
 
 @dataclass
 class StreamChunk:
@@ -110,6 +148,8 @@ class StreamChunk:
     done: bool = False
     usage: Usage | None = None
     finish_reason: str | None = None
+    response: Response | None = None
+    """On the final chunk: the complete reply, with its text, tool calls and usage."""
 
 
 # (input, output) USD per 1M tokens. Anthropic prices as of 2026-10; OpenAI as of 2024.
@@ -120,6 +160,7 @@ PRICING: dict[str, tuple[float, float]] = {
     "gpt-4-turbo": (10.00, 30.00),
     "gpt-3.5-turbo": (0.50, 1.50),
     # Anthropic
+    "claude-fable-5-2": (8.00, 40.00),
     "claude-fable-5-1": (10.00, 50.00),
     "claude-fable-5": (10.00, 50.00),
     "claude-opus-5-5": (4.00, 20.00),
@@ -139,14 +180,21 @@ PRICING: dict[str, tuple[float, float]] = {
     "claude-3-5-haiku": (0.80, 4.00),
 }
 
-# Longest key first, so "gpt-4o-mini" wins over "gpt-4o" and "claude-opus-5-5" over "claude-opus-5".
-_PRICING_KEYS = sorted(PRICING, key=len, reverse=True)
+
+def set_price(model: str, input_per_million: float, output_per_million: float) -> None:
+    """Add or correct a model's price, in USD per million tokens.
+
+    The name matches any model id that contains it, so "my-model" also prices
+    "my-model-2026-01-01". Models with no price are tracked at a cost of 0.
+    """
+    PRICING[model.lower()] = (input_per_million, output_per_million)
 
 
 def calculate_cost(model: str, input_tokens: int, output_tokens: int) -> float:
     """Calculate cost in USD for a given model and token counts."""
     model_key = model.lower()
-    for key in _PRICING_KEYS:
+    # Longest name first, so "gpt-4o-mini" wins over "gpt-4o".
+    for key in sorted(PRICING, key=len, reverse=True):
         if key in model_key:
             input_price, output_price = PRICING[key]
             return (input_tokens * input_price + output_tokens * output_price) / 1_000_000

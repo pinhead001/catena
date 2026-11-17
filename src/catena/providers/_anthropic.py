@@ -8,20 +8,41 @@ from typing import Any
 
 from catena.models import Message, Response, Role, StreamChunk, ToolCall, Usage, calculate_cost
 from catena.providers.base import Provider
-from catena.tools import Tool
+from catena.tools import Tool, tool_choice_instruction
 
 
 def _split_system_and_messages(
     messages: list[Message], system: str | None
 ) -> tuple[str | None, list[dict[str, Any]]]:
     """Collect system text and convert the rest to Anthropic's format."""
-    system_parts = []
-    chat_messages = []
+    system_parts: list[str] = []
+    chat_messages: list[dict[str, Any]] = []
 
     for msg in messages:
         role = msg.role.value if isinstance(msg.role, Role) else msg.role
         if role == "system":
             system_parts.append(msg.content)
+        elif role == "tool":
+            result = {
+                "type": "tool_result",
+                "tool_use_id": msg.tool_call_id,
+                "content": msg.content,
+            }
+            previous = chat_messages[-1] if chat_messages else None
+            # The API wants all results for one assistant turn in a single user message.
+            if previous and previous["role"] == "user" and isinstance(previous["content"], list):
+                previous["content"].append(result)
+            else:
+                chat_messages.append({"role": "user", "content": [result]})
+        elif role == "assistant" and msg.tool_calls:
+            blocks: list[dict[str, Any]] = (
+                [{"type": "text", "text": msg.content}] if msg.content else []
+            )
+            blocks += [
+                {"type": "tool_use", "id": call.id, "name": call.name, "input": call.arguments}
+                for call in msg.tool_calls
+            ]
+            chat_messages.append({"role": "assistant", "content": blocks})
         else:
             chat_messages.append({"role": role, "content": msg.content})
 
@@ -55,6 +76,50 @@ def _request_kwargs(
     if temperature is not None:
         request["temperature"] = temperature
     return request
+
+
+def _tool_kwargs(
+    tools: list[Tool] | None, tool_choice: str | None, system: str | None
+) -> tuple[dict[str, Any], str | None]:
+    """Tool arguments for a request, and the system prompt they imply."""
+    request: dict[str, Any] = {}
+    if tools:
+        request["tools"] = [t.to_anthropic() for t in tools]
+    if tool_choice == "none":
+        request["tool_choice"] = {"type": "none"}
+    elif tool_choice:
+        # Current Claude models reject forced tool_choice ("tool"/"any") with a 400,
+        # so ask in the system prompt and leave the choice on auto.
+        request["tool_choice"] = {"type": "auto"}
+        instruction = tool_choice_instruction(tool_choice)
+        if instruction:
+            system = f"{system}\n\n{instruction}" if system else instruction
+    return request, system
+
+
+def _to_response(message: Any, model_name: str) -> Response:
+    """Convert an Anthropic message to a Response; thinking blocks are left out."""
+    content = ""
+    tool_calls: list[ToolCall] = []
+    for block in message.content:
+        if getattr(block, "type", None) == "text":
+            content += block.text
+        elif getattr(block, "type", None) == "tool_use":
+            tool_calls.append(ToolCall(id=block.id, name=block.name, arguments=block.input))
+
+    return Response(
+        content=content,
+        model=model_name,
+        usage=Usage(
+            input_tokens=message.usage.input_tokens,
+            output_tokens=message.usage.output_tokens,
+            cost_usd=calculate_cost(
+                model_name, message.usage.input_tokens, message.usage.output_tokens
+            ),
+        ),
+        metadata={"stop_reason": message.stop_reason},
+        tool_calls=tool_calls,
+    )
 
 
 class AnthropicProvider(Provider):
@@ -103,42 +168,14 @@ class AnthropicProvider(Provider):
         `temperature` is sent only when given: current Claude models reject it.
         """
         model_name = model or self.default_model
-
-        if tools:
-            kwargs["tools"] = [t.to_anthropic() for t in tools]
-        if tool_choice:
-            # Current Claude models reject forced tool_choice ("tool"/"any") with a 400,
-            # so ask for the tool in the system prompt and leave the choice on auto.
-            kwargs["tool_choice"] = {"type": "auto"}
-            instruction = f"Respond by calling the {tool_choice} tool."
-            system = f"{system}\n\n{instruction}" if system else instruction
+        tool_kwargs, system = _tool_kwargs(tools, tool_choice, system)
 
         response = await self._client.messages.create(
             **_request_kwargs(model_name, messages, system, temperature, max_tokens),
+            **tool_kwargs,
             **kwargs,
         )
-
-        content = ""
-        tool_calls: list[ToolCall] = []
-        for block in response.content:
-            if getattr(block, "type", None) == "text":
-                content += block.text
-            elif getattr(block, "type", None) == "tool_use":
-                tool_calls.append(ToolCall(id=block.id, name=block.name, arguments=block.input))
-
-        return Response(
-            content=content,
-            model=model_name,
-            usage=Usage(
-                input_tokens=response.usage.input_tokens,
-                output_tokens=response.usage.output_tokens,
-                cost_usd=calculate_cost(
-                    model_name, response.usage.input_tokens, response.usage.output_tokens
-                ),
-            ),
-            metadata={"stop_reason": response.stop_reason},
-            tool_calls=tool_calls,
-        )
+        return _to_response(response, model_name)
 
     async def stream(
         self,
@@ -148,29 +185,28 @@ class AnthropicProvider(Provider):
         temperature: float | None = None,
         max_tokens: int | None = None,
         system: str | None = None,
+        tools: list[Tool] | None = None,
+        tool_choice: str | None = None,
         **kwargs: Any,
     ) -> AsyncIterator[StreamChunk]:
         """Stream a completion using Anthropic Claude."""
         model_name = model or self.default_model
+        tool_kwargs, system = _tool_kwargs(tools, tool_choice, system)
 
         async with self._client.messages.stream(
             **_request_kwargs(model_name, messages, system, temperature, max_tokens),
+            **tool_kwargs,
             **kwargs,
         ) as stream:
             async for text in stream.text_stream:
                 yield StreamChunk(delta=text)
 
-            final = await stream.get_final_message()
+            final = _to_response(await stream.get_final_message(), model_name)
             yield StreamChunk(
                 done=True,
-                finish_reason=final.stop_reason,
-                usage=Usage(
-                    input_tokens=final.usage.input_tokens,
-                    output_tokens=final.usage.output_tokens,
-                    cost_usd=calculate_cost(
-                        model_name, final.usage.input_tokens, final.usage.output_tokens
-                    ),
-                ),
+                finish_reason=final.metadata["stop_reason"],
+                usage=final.usage,
+                response=final,
             )
 
     async def __aexit__(self, *args: Any) -> None:
